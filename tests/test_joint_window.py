@@ -93,6 +93,22 @@ def test_load_checkpoint_refreshes_revert_anchor(tmp_path):
     )
 
 
+def test_isolated_fraction_switches_at_the_freeze():
+    from escher.main_sphere import isolated_fraction
+
+    args = OmegaConf.create(
+        {"ISOLATED_TILE_FRACTION": 0.5, "ISOLATED_TILE_FRACTION_FROZEN": 0.25}
+    )
+    assert isolated_fraction(args, frozen=False) == 0.5
+    assert isolated_fraction(args, frozen=True) == 0.25
+    # null (or absent) = historical behavior, both phases identical.
+    args2 = OmegaConf.create(
+        {"ISOLATED_TILE_FRACTION": 0.5, "ISOLATED_TILE_FRACTION_FROZEN": None}
+    )
+    assert isolated_fraction(args2, frozen=True) == 0.5
+    assert isolated_fraction(OmegaConf.create({"ISOLATED_TILE_FRACTION": 0.5}), True) == 0.5
+
+
 def test_boundary_loop_property_is_a_closed_walk(tmp_path):
     escher, _ = weights_escher(tmp_path)
     loop = escher.boundary_loop_t

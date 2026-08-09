@@ -68,6 +68,23 @@ def texture_tv(texture: torch.Tensor) -> torch.Tensor:
     return dx.square().mean() + dy.square().mean()
 
 
+def isolated_fraction(args, frozen: bool) -> float:
+    """The isolated-view share for this phase of the run.
+
+    ``ISOLATED_TILE_FRACTION_FROZEN`` (null = same as the base fraction) lets the
+    frozen tail run a different cadence: measured on the round-2 batch, the
+    nested-figure attractor -- a complete second fish painted inside the tile --
+    is reinforced by ISOLATED views once the shape stops moving, while TILED
+    views judge the texture in its Escher context, fish-beside-fish.
+    """
+    frac = args.ISOLATED_TILE_FRACTION
+    if frozen:
+        override = args.get("ISOLATED_TILE_FRACTION_FROZEN")
+        if override is not None:
+            frac = override
+    return float(frac)
+
+
 def drop_textures(texture: torch.Tensor, batch: int, prob_percent: float) -> torch.Tensor:
     """GEM's texture drop: replace ~prob% of the batch with a flat random gray.
 
@@ -734,7 +751,7 @@ class SphereEscher:
         # Alternate between the two framings. Isolated views give SDS a silhouette to shape
         # the tile outline with; tiled views make the texture read correctly in context.
         # The fraction sets the actual cadence (0.5 -> every 2nd step), not just on/off.
-        frac = a.ISOLATED_TILE_FRACTION
+        frac = isolated_fraction(a, frozen)
         isolated = frac > 0 and iteration % max(1, round(1.0 / frac)) == 0
 
         # GEM's texture drop, isolated + unfrozen only: dropped on a tiled view

@@ -1,0 +1,77 @@
+# Round 3: refine the emergent nested fish. The round-2 winner (joint K600 +
+# drop 50, no crop) paints a complete SECOND fish inside the tile-fish during
+# the frozen tail; these seven arms measure which lever controls it -- and one
+# arm leans in on purpose. All fish arms share the round-2 carve byte-for-byte.
+#
+#   python -m escher.pipeline escher/configs/batch_gem_round3.yaml
+#
+# Morning eval:
+#   python escher/sanity_checks/eval_specificity_batch.py ROOT=runs/gem_round3 \
+#       CARVE=runs/acceptance_fish/fish_run1/carve_s0/checkpoint.pt
+
+batch_name: gem_round3
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/acceptance_fish/fish_run1/carve_s0/checkpoint.pt
+  prompt: "a fish with scales and fins, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_joint.yaml]
+      TEXTURE_DROP_PROB: 50
+      COTANGENT_RELATIVE_WEIGHTS: true
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: true
+
+jobs:
+  - figure: fish_jd_seed1   # variance control: is the nesting seed luck?
+    stages:
+      texture:
+        SEED: 1
+
+  - figure: fish_jd_tiled   # frozen-tail lever: Escher-context views shape the interior
+    stages:
+      texture:
+        ISOLATED_TILE_FRACTION_FROZEN: 0.25
+
+  - figure: fish_jd_ban     # ONE targeted ban, nothing else (the ban-pile collapsed)
+    stages:
+      texture:
+        NEGATIVE_PROMPT: "noisy, grainy, photorealistic, 3d render, blurry, cluttered background, knitted, yarn, fabric, woven texture, a fish inside a fish, nested fish"
+
+  - figure: fish_jd_lrw     # fishier outline in the window -> less interior to nest in
+    stages:
+      texture:
+        LR_W: 0.1
+
+  - figure: fish_jd_tiled_ban  # the two independent levers combined
+    stages:
+      texture:
+        ISOLATED_TILE_FRACTION_FROZEN: 0.25
+        NEGATIVE_PROMPT: "noisy, grainy, photorealistic, 3d render, blurry, cluttered background, knitted, yarn, fabric, woven texture, a fish inside a fish, nested fish"
+
+  - figure: fish_nested     # harness the emergent effect deliberately
+    prompt: "a mother fish carrying a smaller baby fish inside her belly, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+
+  - figure: bird            # generalization: the full pipeline on a new figure
+    reuse_carve: null
+    prompt: "a song bird with folded wings, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+    silhouette_prompt: "a plain solid black silhouette of a song bird with folded wings, white background, minimal flat logo, centered, full body"
+    seeds: [0]
+    stages:
+      target:
+        N: 32
+        STEPS: 30
+      screen:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml]
+        TARGET_SWEEP_STEPS: 150
+        KEEP_CHECKPOINTS: 1
+      carve:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml]
+        SHAPE_STEPS: 1500
+        KEEP_CHECKPOINTS: 2

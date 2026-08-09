@@ -195,6 +195,11 @@ RESET_SHAPE_OPTIMIZER_ON_RESUME: false
 W_REVERT_ON_FOLD: false
 # The carve's outline-smoothness prior, live during the joint window (0 = off).
 BOUNDARY_SMOOTH_WEIGHT_W: 0.0
+# Isolated-view share for the FROZEN tail only (null = ISOLATED_TILE_FRACTION,
+# the historical behavior). Lowering it (e.g. 0.25) makes the frozen texture
+# answer mostly to TILED Escher-context views -- the round-2 lever against the
+# nested-figure attractor that isolated views reinforce.
+ISOLATED_TILE_FRACTION_FROZEN: null
 # GEM's texture drop, percent of the batch (planar runs 50): dropped elements
 # render the tile as a flat random-gray cutout -- a pure OUTLINE signal under
 # the same prompt. Isolated + unfrozen steps only. 0 = off.
