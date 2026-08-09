@@ -1,0 +1,8 @@
+# Prompt-specificity A/B overlay -- list LAST, after the joint overlay. GEM's
+# own negative prompts ban style/quality only (noisy, grainy, ...); explicit
+# multi-subject bans are novel to this project, which is exactly why they are
+# A/B'd here and never defaulted. The positive prompt names ONE specific subject
+# in a canonical pose instead of the generic "a fish".
+
+PROMPT: "a single koi fish seen from the side, one whole fish, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+NEGATIVE_PROMPT: "noisy, grainy, photorealistic, 3d render, blurry, cluttered background, knitted, yarn, fabric, woven texture, two fish, multiple fish, school of fish, cropped, partial figure"

@@ -1,0 +1,70 @@
+# The GEM-specificity experiment: six full texture runs from ONE byte-identical
+# carve init, isolating each lever of the original Generative Escher Meshes
+# recipe on the sphere. ~6 h overnight (each 7000-step run ~50-55 min compiled).
+#
+#   python -m escher.pipeline escher/configs/batch_gem_specificity.yaml
+#
+# reuse_carve points at the acceptance batch's fish carve on this machine (hard
+# IoU 0.8683, valid); regenerate with batch_acceptance.yaml if absent.
+#
+# Morning eval per arm: metrics_background.py (bg gate), metrics_outline.py
+# <tex ckpt> <carve ckpt> (pre-registered: iou_vs_target MAY drop ~0.05 in
+# joint arms while specificity rises; flips must be 0), timing.csv (frozen-tail
+# ~0.42 s/step), and the contact sheet for the only judgment that matters:
+# does the OUTLINE alone read as one fish.
+
+batch_name: gem_specificity
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/acceptance_fish/fish_run1/carve_s0/checkpoint.pt
+  prompt: "a fish with scales and fins, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+  stages:
+    texture:
+      COTANGENT_RELATIVE_WEIGHTS: true
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: true
+
+jobs:
+  - figure: fish_base   # two-phase control (the current recipe)
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml]
+
+  - figure: fish_joint  # + joint window K=600
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_joint.yaml]
+
+  - figure: fish_joint_drop  # + GEM texture drop 50%
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_joint.yaml]
+        TEXTURE_DROP_PROB: 50
+
+  - figure: fish_joint_drop_crop  # + GEM tight crop
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_joint.yaml]
+        TEXTURE_DROP_PROB: 50
+        CROP_RENDERINGS: true
+
+  - figure: fish_full_promptA  # the full kit + specific-subject prompt
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_joint.yaml, configs/sphere_texture_octa_subjectA.yaml]
+        TEXTURE_DROP_PROB: 50
+        CROP_RENDERINGS: true
+
+  - figure: fish_full_k1500  # the full kit with a deeper joint window
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_joint.yaml]
+        TEXTURE_DROP_PROB: 50
+        CROP_RENDERINGS: true
+        FREEZE_SHAPE_AFTER: 1500

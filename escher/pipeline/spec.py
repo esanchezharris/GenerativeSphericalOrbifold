@@ -36,6 +36,10 @@ class JobPlan:
     seeds: list[int]
     texture_seeds: list[int]
     reuse_targets: str | None
+    # A carve checkpoint to resume textures from directly, skipping the job's
+    # own target/screen/carve stages -- gives every arm of an A/B a
+    # byte-identical shape init.
+    reuse_carve: str | None = None
     stages: dict = field(default_factory=dict)  # per-stage raw config overrides
     root: Path = Path(".")
 
@@ -144,6 +148,7 @@ def load_spec(path: str | Path) -> tuple[str, Path, list[JobPlan]]:
                     seeds=seeds,
                     texture_seeds=tseeds,
                     reuse_targets=cfg.get("reuse_targets"),
+                    reuse_carve=cfg.get("reuse_carve"),
                     stages=cfg["stages"],
                     root=batch_root / job_id,
                 )
@@ -156,4 +161,6 @@ def load_spec(path: str | Path) -> tuple[str, Path, list[JobPlan]]:
     for p in plans:
         if p.reuse_targets and not Path(p.reuse_targets).exists():
             raise ValueError(f"{path}: {p.job_id}: reuse_targets {p.reuse_targets} does not exist")
+        if p.reuse_carve and not Path(p.reuse_carve).exists():
+            raise ValueError(f"{path}: {p.job_id}: reuse_carve {p.reuse_carve} does not exist")
     return batch_name, batch_root, plans

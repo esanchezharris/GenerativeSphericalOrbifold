@@ -41,6 +41,26 @@ class StageTask:
 
 def job_tasks(plan: JobPlan, dry_run: bool) -> list[StageTask]:
     tasks: list[StageTask] = []
+    if plan.reuse_carve:
+        # A fixed carve init: the job runs only textures + renders. Every A/B arm
+        # sharing the same reuse_carve gets a byte-identical shape.
+        for tseed in plan.texture_seeds:
+            tex = f"texture_s{tseed}"
+            tasks.append(
+                StageTask(
+                    plan, tex, "gpu", deps=[], require="all_ok",
+                    build=None,
+                    artifact=plan.tex_dir(tseed) / "checkpoint.pt",
+                )
+            )
+            tasks.append(
+                StageTask(
+                    plan, f"render_s{tseed}", "gpu", deps=[tex], require="all_ok",
+                    build=lambda p=plan, t=tseed: stages.render_params(p, t, dry_run),
+                    artifact=plan.tex_dir(tseed) / "tiling.obj",
+                )
+            )
+        return tasks
     if not plan.reuse_targets:
         tasks.append(
             StageTask(
@@ -192,9 +212,9 @@ class Scheduler:
     # -------------------------------------------------------------- execution
     def _execute(self, task: StageTask) -> None:
         plan = task.plan
-        if task.build is None:  # texture: bind the best-carve pick now
+        if task.build is None:  # texture: bind the carve init now
             tseed = int(task.name.split("_s")[1])
-            resume = self._best_carve(plan)
+            resume = plan.reuse_carve or self._best_carve(plan)
             params = stages.texture_params(plan, tseed, resume, self.dry_run)
         else:
             params = task.build()

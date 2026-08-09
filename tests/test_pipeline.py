@@ -68,6 +68,47 @@ jobs:
         load_spec(spec)
 
 
+def test_reuse_carve_skips_shape_stages(tmp_path):
+    from escher.pipeline.scheduler import job_tasks
+
+    ckpt = tmp_path / "carve.pt"
+    ckpt.write_text("x")
+    spec = write_spec(
+        tmp_path / "b.yaml",
+        f"""
+batch_name: t
+runs_root: {tmp_path.as_posix()}/runs
+defaults:
+  texture_seeds: [0, 1]
+jobs:
+  - figure: fish
+    reuse_carve: {ckpt.as_posix()}
+""",
+    )
+    _, _, plans = load_spec(spec)
+    assert plans[0].reuse_carve == ckpt.as_posix()
+    tasks = job_tasks(plans[0], dry_run=True)
+    names = [t.name for t in tasks]
+    assert names == ["texture_s0", "render_s0", "texture_s1", "render_s1"]
+    assert all(t.lane == "gpu" for t in tasks)
+    # Textures are immediately ready: no shape dependencies.
+    assert tasks[0].deps == []
+
+
+def test_reuse_carve_missing_path_rejected(tmp_path):
+    spec = write_spec(
+        tmp_path / "b.yaml",
+        """
+batch_name: t
+jobs:
+  - figure: fish
+    reuse_carve: does/not/exist.pt
+""",
+    )
+    with pytest.raises(ValueError, match="reuse_carve"):
+        load_spec(spec)
+
+
 def test_manifest_roundtrip_and_artifact_check(tmp_path):
     m = Manifest(tmp_path / "m.json", "b")
     art = tmp_path / "ck.pt"
