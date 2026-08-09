@@ -1,0 +1,25 @@
+# GEM-parity JOINT shape+texture window -- overlay, listed AFTER
+# sphere_texture.yaml + sphere_texture_octa.yaml (which stay byte-identical):
+#
+#   python escher/main_sphere.py "CONF_FILE=[configs/sphere_texture.yaml,configs/sphere_texture_octa.yaml,configs/sphere_texture_octa_joint.yaml]" \
+#       RESUME=<carve>/checkpoint.pt START_STEP=0 ...
+#
+# The original Generative Escher Meshes gets its subject-specificity from the
+# prompt sculpting the OUTLINE: shape and texture train jointly, so the tile
+# becomes the subject instead of a canvas the subject is painted on. The sphere
+# froze the shape at step 0 on the strength of a zero-gradient measurement that
+# probe_outline_grads.py showed to be a framing artifact (at the production
+# framing dL/dW = 4.5e-4 with 58.6% background). This overlay runs the first K
+# texture steps with the shape UNFROZEN -- the carve is the init, SDS refines --
+# then latches frozen for the long texture tail, exactly the planar port's
+# ONLY_TEXTURE_FROM_THIS_POINT pattern (planar trains shape for steps 0-599).
+
+FREEZE_SHAPE_AFTER: 600
+LR_W: 0.03                          # sweep candidate: 0.1 (planar is 10x texture LR)
+COTANGENT_RELATIVE_WEIGHTS: true
+
+# Safety kit (see sphere.yaml comments): spherical Tutte has NO injectivity
+# guarantee, unlike the planar solve GEM leans on.
+RESET_SHAPE_OPTIMIZER_ON_RESUME: true
+W_REVERT_ON_FOLD: true
+BOUNDARY_SMOOTH_WEIGHT_W: 500.0     # the carve-calibrated value

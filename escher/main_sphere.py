@@ -68,6 +68,30 @@ def texture_tv(texture: torch.Tensor) -> torch.Tensor:
     return dx.square().mean() + dy.square().mean()
 
 
+def drop_textures(texture: torch.Tensor, batch: int, prob_percent: float) -> torch.Tensor:
+    """GEM's texture drop: replace ~prob% of the batch with a flat random gray.
+
+    The dropped elements show SDS the tile as a solid-colored CUTOUT on the
+    random background -- the only thing that can satisfy the prompt there is the
+    OUTLINE, so this is a pure shape signal folded into the joint pass (the
+    planar port runs it at 50%). Element 0 is never dropped, guaranteeing the
+    texture always receives some gradient; the ``*0 + fill`` construction keeps
+    the graph connected while sending exactly zero gradient into the dropped
+    elements' texels.
+    """
+    tex_b = texture.unsqueeze(0).expand(batch, -1, -1, -1)
+    p = float(prob_percent) / 100.0
+    drop = np.random.choice([False, True], size=batch, p=[1.0 - p, p])
+    drop[0] = False
+    if not drop.any():
+        return tex_b
+    tex_b = tex_b.clone()
+    fills = torch.rand(batch, 1, 1, 1, device=texture.device, dtype=texture.dtype)
+    idx = torch.as_tensor(drop, device=texture.device)
+    tex_b[idx] = tex_b[idx] * 0 + fills[idx]
+    return tex_b
+
+
 def texture_fill_loss(
     texture: torch.Tensor, valid: torch.Tensor, chroma_min: float
 ) -> torch.Tensor:
@@ -216,6 +240,8 @@ class SphereEscher:
             n_edges = len(self.mesh.edges)
             # Start from zero: sigmoid(0) = 0.5 -> uniform weights -> the undeformed lune.
             self.W = torch.nn.Parameter(torch.zeros(n_edges, dtype=torch.float64))
+            # Revert anchor for W_REVERT_ON_FOLD; refreshed on checkpoint load.
+            self._W_good: torch.Tensor | None = self.W.detach().clone()
             shape_group = {"params": [self.W], "lr": a.LR_W}
         res = a.TEXTURE_RESOLUTION
         init_color = a.get("TEXTURE_INIT_COLOR", None)
@@ -382,6 +408,18 @@ class SphereEscher:
             return self.embedder(self.b_orb.boundary_b(self.P))
         return self.embedder(self.edge_weights())
 
+    @property
+    def boundary_loop_t(self) -> torch.Tensor:
+        """Ordered boundary-loop vertex indices, cached (used by the smoothness
+        prior during the joint SDS window)."""
+        loop = getattr(self, "_boundary_loop_t", None)
+        if loop is None:
+            from escher.soft_silhouette import boundary_loop
+
+            loop = torch.as_tensor(boundary_loop(self.mesh), dtype=torch.long)
+            self._boundary_loop_t = loop
+        return loop
+
     def texture_valid_mask(self) -> torch.Tensor:
         """Bool ``(R, R)`` of texels the mesh actually samples, cached."""
         mask = getattr(self, "_tex_valid_mask", None)
@@ -412,11 +450,28 @@ class SphereEscher:
         if cache is None:
             with torch.no_grad():
                 points = self.solve_points()
+            flips = count_flipped_faces(points.detach().cpu().numpy(), self.mesh.faces)
+            # Latch guard: the frozen tail runs this geometry for thousands of
+            # steps -- never latch a folded state when a certified anchor exists.
+            if (
+                flips > 0
+                and bool(self.args.get("W_REVERT_ON_FOLD", False))
+                and getattr(self, "_W_good", None) is not None
+            ):
+                print(
+                    f"!! freeze latched with {flips} folded faces -- restoring the "
+                    "last certified W before caching",
+                    flush=True,
+                )
+                with torch.no_grad():
+                    self.W.copy_(self._W_good)
+                    points = self.solve_points()
+                flips = count_flipped_faces(
+                    points.detach().cpu().numpy(), self.mesh.faces
+                )
             self._frozen_cache = cache = {
                 "points": points.detach(),
-                "flips": count_flipped_faces(
-                    points.detach().cpu().numpy(), self.mesh.faces
-                ),
+                "flips": flips,
                 "energy": self.embedder.last_result.energy,
                 "solver_iters": (
                     self.embedder.last_result.stage1.n_iter
@@ -438,12 +493,33 @@ class SphereEscher:
 
         Returns ``(points, flips, reverted)``; ``flips`` counts folds in the returned
         state (0 unless even the revert target folds, which means the run is unhealthy).
+
+        Weights mode is historically a tripwire only (the deterministic carve never
+        folded across two orders of weight magnitude). ``W_REVERT_ON_FOLD`` arms the
+        same backtracking rejection for the joint SDS window, where the score's
+        noisier pulls make folds plausible again.
         """
         points = self.solve_points()
         if self.args.PARAM_MODE != "boundary":
-            return points, count_flipped_faces(
-                points.detach().cpu().numpy(), self.mesh.faces
-            ), False
+            flips = count_flipped_faces(points.detach().cpu().numpy(), self.mesh.faces)
+            if not bool(self.args.get("W_REVERT_ON_FOLD", False)):
+                return points, flips, False
+            reverted = False
+            if flips > 0 and getattr(self, "_W_good", None) is not None:
+                proposed = self.W.detach().clone()
+                for alpha in (0.5, 0.25, 0.125, 0.0):
+                    with torch.no_grad():
+                        self.W.copy_(self._W_good + alpha * (proposed - self._W_good))
+                    points = self.solve_points()
+                    flips = count_flipped_faces(
+                        points.detach().cpu().numpy(), self.mesh.faces
+                    )
+                    if flips == 0:
+                        break
+                reverted = True
+            if flips == 0:
+                self._W_good = self.W.detach().clone()
+            return points, flips, reverted
 
         flips = count_flipped_faces(points.detach().cpu().numpy(), self.mesh.faces)
         reverted = False
@@ -660,9 +736,18 @@ class SphereEscher:
         # The fraction sets the actual cadence (0.5 -> every 2nd step), not just on/off.
         frac = a.ISOLATED_TILE_FRACTION
         isolated = frac > 0 and iteration % max(1, round(1.0 / frac)) == 0
+
+        # GEM's texture drop, isolated + unfrozen only: dropped on a tiled view
+        # SDS would see a solid-gray full-frame ball (no silhouette, no signal),
+        # and with the shape frozen the dropped elements can move nothing at all.
+        tex_in = None
+        drop_p = float(a.get("TEXTURE_DROP_PROB", 0.0) or 0.0)
+        if isolated and not frozen and drop_p > 0:
+            tex_in = drop_textures(self.texture, a.IMAGE_BATCH_SIZE, drop_p)
+
         with self.timer.phase("render"):
             images, alpha, points = self.render(
-                a.IMAGE_BATCH_SIZE, isolated=isolated, points=points_in
+                a.IMAGE_BATCH_SIZE, isolated=isolated, points=points_in, texture=tex_in
             )
 
         if a.RANDOM_BACKGROUND:
@@ -670,6 +755,14 @@ class SphereEscher:
         else:
             bg = torch.ones(1, 1, 1, 3, device=self.device)
         composited = images * alpha + bg * (1.0 - alpha)
+
+        # GEM's tight crop, isolated views only: SDS sees a frame-filling figure
+        # while the camera keeps the margin that antialias outline gradients (and
+        # the background contrast) require.
+        if isolated and bool(a.get("CROP_RENDERINGS", False)):
+            from escher.rendering.crop_rendering import crop_composited
+
+            composited = crop_composited(composited, alpha)
 
         # train_step returns (loss, sampled timestep); the timestep is diagnostic only.
         with self.timer.phase("sds"):
@@ -695,8 +788,18 @@ class SphereEscher:
                     reg = reg + a.BOUNDARY_MARGIN_WEIGHT * area_margin_loss(
                         points, self.faces_t, self.ref_areas, margin=a.BOUNDARY_MARGIN
                     )
-            elif a.W_REGULARIZATION > 0:
-                reg = reg + a.W_REGULARIZATION * (self.W**2).sum()
+            else:
+                if a.W_REGULARIZATION > 0:
+                    reg = reg + a.W_REGULARIZATION * (self.W**2).sum()
+                # The weights-mode outline-smoothness prior from the carve
+                # (main_shape.py), for the joint SDS window: without it nothing
+                # charges for high-frequency boundary wobble and the outline
+                # serrates. 0 (the default) = today's behavior.
+                smooth_w = float(a.get("BOUNDARY_SMOOTH_WEIGHT_W", 0.0))
+                if smooth_w > 0:
+                    b = points[self.boundary_loop_t]
+                    second = b.roll(-1, 0) - 2.0 * b + b.roll(1, 0)
+                    reg = reg + smooth_w * second.square().sum()
         # The TV term lives on the texture's own device/dtype, so it adds to the loss
         # directly (unlike the float64 CPU shape regs, which need the .to()).
         tv_w = a.get("TEXTURE_TV_WEIGHT", 0.0)
@@ -891,6 +994,21 @@ class SphereEscher:
         cross-phase RESUME wants it (shape from the checkpoint, this run's fresh
         texture -- the shape phase never trained its texture)."""
         state = torch.load(path, map_location="cpu", weights_only=False)
+
+        # A checkpoint whose geometry settings differ from this run's silently
+        # reinterprets every parameter -- a cotangent-relative W loaded into an
+        # absolute-weights run is a different shape entirely. Warn, don't raise:
+        # cross-config loads are sometimes deliberate (render experiments).
+        ck_cfg = state.get("config") or {}
+        for key in ("PARAM_MODE", "ORBIFOLD_CONES", "KITE_N", "COTANGENT_RELATIVE_WEIGHTS"):
+            theirs = ck_cfg.get(key) if isinstance(ck_cfg, dict) else None
+            ours = self.args.get(key)
+            if theirs is not None and str(ours) != str(theirs):
+                print(
+                    f"!! load_checkpoint: {key} mismatch -- checkpoint {theirs!r}, "
+                    f"this run {ours!r}; the loaded parameters will be reinterpreted"
+                )
+
         with torch.no_grad():
             if "P" in state:
                 self.P.copy_(state["P"])
@@ -900,8 +1018,14 @@ class SphereEscher:
                 self.texture.copy_(state["texture"].to(self.device))
         self.optimizer.load_state_dict(state["optimizer"])
         # The loaded parameters need a fresh solve; a cache from before the load
-        # would render the OLD shape forever.
+        # would render the OLD shape forever. Revert anchors must track the LOADED
+        # state, not the init, or the first fold would backtrack toward the
+        # undeformed domain.
         self._frozen_cache = None
+        if "P" in state and getattr(self, "_P_good", None) is not None:
+            self._P_good = self.P.detach().clone()
+        if "W" in state and getattr(self, "_W_good", None) is not None:
+            self._W_good = self.W.detach().clone()
         return int(state["iteration"])
 
     def save_snapshot(self, iteration: int) -> None:
@@ -978,6 +1102,11 @@ class SphereEscher:
                 resume_from,
                 reset_texture=a.get("RESET_TEXTURE_ON_RESUME", False),
             )
+            # The carve's Adam moments for the shape were built from mask-loss
+            # gradients three orders of magnitude larger than SDS's -- carrying
+            # them into a joint window kicks the shape on step 0.
+            if a.get("RESET_SHAPE_OPTIMIZER_ON_RESUME", False):
+                self.reset_shape_optimizer_state()
             first_step = loaded + 1 if start_step is None else int(start_step)
             print(
                 f"resuming from {resume_from} (checkpoint step {loaded}) "

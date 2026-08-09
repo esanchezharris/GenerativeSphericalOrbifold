@@ -57,3 +57,48 @@ def crop(rendered_views: torch.Tensor) -> torch.Tensor:
         rendered_views[i] = transforms(rendered_views[i][min_h:max_h, min_w:max_w].permute(2, 0, 1)).permute(1, 2, 0)
 
     return rendered_views
+
+
+def crop_composited(
+    composited: torch.Tensor, alpha: torch.Tensor, expand: float = 1.1
+) -> torch.Tensor:
+    """Tight square crop of each composited view around its figure, resized back.
+
+    The spherical port of the planar ``crop`` above (GEM's CROP_RENDERINGS): SDS
+    always sees "one figure, framed tight, at maximum pixel scale" regardless of
+    how the outline deforms -- while the CAMERA keeps its margin, which is what
+    lets ``dr.antialias`` produce outline gradients at all. Out-of-place (the
+    planar version mutates its input and throws on empty alpha, which the caller
+    papers over with a bare ``except``); empty alpha passes through untouched.
+    The crop window indices are non-differentiable, but the crop is applied after
+    antialias+compositing, so gradients flow through the slice and resize.
+
+    Args:
+        composited: ``(B, H, W, 3)`` background-composited renders.
+        alpha: ``(B, H, W, 1)`` coverage from the same render.
+    """
+    import torch.nn.functional as F
+
+    b, h, w, _ = composited.shape
+    out = []
+    for i in range(b):
+        mask = alpha[i, ..., 0] > 0
+        if not mask.any():
+            out.append(composited[i])
+            continue
+        rows = torch.where(mask.any(dim=1))[0]
+        cols = torch.where(mask.any(dim=0))[0]
+        r0, r1 = int(rows[0]), int(rows[-1])
+        c0, c1 = int(cols[0]), int(cols[-1])
+        side = min(int(max(r1 - r0 + 1, c1 - c0 + 1) * expand), h, w)
+        top = max(0, min((r0 + r1 + 1) // 2 - side // 2, h - side))
+        left = max(0, min((c0 + c1 + 1) // 2 - side // 2, w - side))
+        patch = composited[i, top : top + side, left : left + side, :]
+        patch = F.interpolate(
+            patch.permute(2, 0, 1).unsqueeze(0),
+            size=(h, w),
+            mode="bilinear",
+            align_corners=False,
+        )[0].permute(1, 2, 0)
+        out.append(patch)
+    return torch.stack(out)

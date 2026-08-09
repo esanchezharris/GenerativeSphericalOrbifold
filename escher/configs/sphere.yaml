@@ -183,6 +183,26 @@ SNAPSHOT_FREQ: null
 # checkpoint.pt (the latest) always survives.
 KEEP_CHECKPOINTS: -1
 
+### joint shape+texture (GEM-parity) window -- all default off; the overlay
+### sphere_texture_octa_joint.yaml arms them together. Only meaningful when
+### FREEZE_SHAPE_AFTER > 0 on a texture run resumed from a carve.
+# Drop the carve's Adam moments for the shape on resume (they were built from
+# mask-loss gradients ~3 orders larger than SDS's and kick the shape at step 0).
+RESET_SHAPE_OPTIMIZER_ON_RESUME: false
+# Weights-mode fold rejection (backtrack toward the last certified W) during the
+# joint window, plus the freeze-latch guard. The deterministic carve never
+# needed it; SDS's noisier pulls make folds plausible again.
+W_REVERT_ON_FOLD: false
+# The carve's outline-smoothness prior, live during the joint window (0 = off).
+BOUNDARY_SMOOTH_WEIGHT_W: 0.0
+# GEM's texture drop, percent of the batch (planar runs 50): dropped elements
+# render the tile as a flat random-gray cutout -- a pure OUTLINE signal under
+# the same prompt. Isolated + unfrozen steps only. 0 = off.
+TEXTURE_DROP_PROB: 0.0
+# GEM's tight crop of isolated views (alpha-bbox x1.1, resized back): SDS sees a
+# frame-filling figure while the camera keeps the margin antialias needs.
+CROP_RENDERINGS: false
+
 ### zero-background texture levers (all default off; see escher/rendering/texture_mask.py)
 # Chroma floor on the sampled texels: the per-tile hue tint is a rotation about the
 # RGB gray axis, so achromatic (white/gray) paint renders identically in EVERY tile
