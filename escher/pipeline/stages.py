@@ -63,7 +63,14 @@ def target_params(plan: JobPlan, dry_run: bool) -> dict:
         ),
         resolve=True,
     )
-    return {"stage": "target", "dry_run": dry_run, "args": args}
+    params = {"stage": "target", "dry_run": dry_run, "args": args}
+    if plan.color_target == "auto":
+        # The SD pipeline is already loaded in this child; generate the color
+        # anchor image (texture-style prompt on white) in the same pass.
+        params["color_prompt"] = (
+            f"{plan.prompt}, white background, centered, full body"
+        )
+    return params
 
 
 def _shape_extra(plan: JobPlan) -> dict:
@@ -123,12 +130,19 @@ def texture_params(plan: JobPlan, tseed: int, resume_from: str, dry_run: bool) -
         "SEED": int(tseed),
     }
     args = _merged(["configs/sphere.yaml"], plan.stages.get("texture"), extra)
-    return {
+    params = {
         "stage": "texture",
         "dry_run": dry_run,
         "args": args,
         "resume_from": resume_from,
     }
+    if plan.color_target:
+        params["bake_from"] = (
+            str(plan.targets_dir / "color.png")
+            if plan.color_target == "auto"
+            else plan.color_target
+        )
+    return params
 
 
 def render_params(plan: JobPlan, tseed: int, dry_run: bool) -> dict:
@@ -159,11 +173,19 @@ def _stage_target(params: dict) -> dict:
             ).astype(np.uint8) * 255
             imageio.imwrite(out_dir / f"target_{i:02d}.png", m)
         np.save(out_dir / "target.npy", (m > 0).astype(np.float32))
+        if params.get("color_prompt"):
+            color = np.full((64, 64, 3), 255, dtype=np.uint8)
+            color[20:44, 16:48] = (200, 60, 60)  # a dry-run "figure"
+            imageio.imwrite(out_dir / "color.png", color)
         return {"chosen": 2, "out_dir": str(out_dir), "dry_run": True}
-    from escher.make_target import generate
+    from escher.make_target import generate, generate_color
 
     try:
-        return generate(args)
+        result = generate(args)
+        if params.get("color_prompt"):
+            color_args = OmegaConf.create({**params["args"], "PROMPT": params["color_prompt"], "N": 4})
+            generate_color(color_args)
+        return result
     except ValueError as e:
         raise StageFailure(2, str(e)) from e
 
@@ -189,6 +211,17 @@ def _stage_carve(params: dict) -> dict:
 
 def _stage_texture(params: dict) -> dict:
     args = OmegaConf.create(params["args"])
+    if params.get("bake_from") and not params.get("dry_run"):
+        # Image-anchored init: bake the color figure into the texture before
+        # the run starts (composition/palette decided deterministically).
+        from escher.texture_init import bake_texture_init
+
+        init_path = bake_texture_init(
+            params["resume_from"],
+            params["bake_from"],
+            Path(args.OUTPUT_DIR) / "texture_init.npy",
+        )
+        args.TEXTURE_INIT_PATH = str(init_path)
     if params.get("dry_run"):
         # Exercise the real cross-phase resume artifacts (checkpoint load with
         # reset_texture, fresh step counter) without the diffusion stack.

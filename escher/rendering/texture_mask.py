@@ -55,6 +55,56 @@ def uv_valid_mask(uv: np.ndarray, faces: np.ndarray, resolution: int) -> np.ndar
     return ndimage.binary_dilation(mask, iterations=1)
 
 
+def texel_surface_points(
+    points3d: np.ndarray, uv: np.ndarray, faces: np.ndarray, resolution: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(R, R, 3)`` 3D surface point of each texel + the valid mask.
+
+    The inverse of texture sampling: for every texel center inside some UV
+    triangle, blend that face's 3D vertices with the texel's barycentric
+    weights. This is what lets an image be baked INTO the texture -- texel ->
+    surface point -> camera projection -> image sample.
+    """
+    uv = np.asarray(uv, dtype=np.float64)
+    pts = np.asarray(points3d, dtype=np.float64)
+    surface = np.zeros((resolution, resolution, 3), dtype=np.float64)
+    mask = np.zeros((resolution, resolution), dtype=bool)
+    centers = (np.arange(resolution) + 0.5) / resolution
+
+    for tri in np.asarray(faces):
+        a, b, c = uv[tri[0]], uv[tri[1]], uv[tri[2]]
+        lo = np.floor(np.minimum(np.minimum(a, b), c) * resolution - 1).astype(int)
+        hi = np.ceil(np.maximum(np.maximum(a, b), c) * resolution + 1).astype(int)
+        lo = np.clip(lo, 0, resolution - 1)
+        hi = np.clip(hi, 0, resolution - 1)
+        us = centers[lo[0] : hi[0] + 1]
+        vs = centers[lo[1] : hi[1] + 1]
+        if us.size == 0 or vs.size == 0:
+            continue
+        uu, vv = np.meshgrid(us, vs, indexing="xy")
+        d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+        if abs(d) < 1e-15:
+            continue
+        w0 = ((b[1] - c[1]) * (uu - c[0]) + (c[0] - b[0]) * (vv - c[1])) / d
+        w1 = ((c[1] - a[1]) * (uu - c[0]) + (a[0] - c[0]) * (vv - c[1])) / d
+        w2 = 1.0 - w0 - w1
+        eps = -1e-9
+        inside = (w0 >= eps) & (w1 >= eps) & (w2 >= eps)
+        if not inside.any():
+            continue
+        blend = (
+            w0[..., None] * pts[tri[0]]
+            + w1[..., None] * pts[tri[1]]
+            + w2[..., None] * pts[tri[2]]
+        )
+        row = slice(lo[1], hi[1] + 1)
+        col = slice(lo[0], hi[0] + 1)
+        write = inside & ~mask[row, col]
+        surface[row, col][write] = blend[write]
+        mask[row, col] |= inside
+    return surface, mask
+
+
 def gutter_fill(texture: np.ndarray, valid: np.ndarray) -> np.ndarray:
     """Fill invalid texels with the color of their NEAREST valid texel.
 

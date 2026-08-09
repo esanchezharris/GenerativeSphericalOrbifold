@@ -40,6 +40,10 @@ class JobPlan:
     # own target/screen/carve stages -- gives every arm of an A/B a
     # byte-identical shape init.
     reuse_carve: str | None = None
+    # Image-anchored texture init: a color figure image baked into the texture
+    # before SDS (escher/texture_init.py). A path, or "auto" = the target stage
+    # generates targets_dir/color.png with the job's texture prompt.
+    color_target: str | None = None
     stages: dict = field(default_factory=dict)  # per-stage raw config overrides
     root: Path = Path(".")
 
@@ -149,6 +153,7 @@ def load_spec(path: str | Path) -> tuple[str, Path, list[JobPlan]]:
                     texture_seeds=tseeds,
                     reuse_targets=cfg.get("reuse_targets"),
                     reuse_carve=cfg.get("reuse_carve"),
+                    color_target=cfg.get("color_target"),
                     stages=cfg["stages"],
                     root=batch_root / job_id,
                 )
@@ -163,4 +168,13 @@ def load_spec(path: str | Path) -> tuple[str, Path, list[JobPlan]]:
             raise ValueError(f"{path}: {p.job_id}: reuse_targets {p.reuse_targets} does not exist")
         if p.reuse_carve and not Path(p.reuse_carve).exists():
             raise ValueError(f"{path}: {p.job_id}: reuse_carve {p.reuse_carve} does not exist")
+        if p.color_target and p.color_target != "auto" and not Path(p.color_target).exists():
+            raise ValueError(
+                f"{path}: {p.job_id}: color_target {p.color_target} does not exist"
+            )
+        if p.color_target == "auto" and (p.reuse_targets or p.reuse_carve):
+            raise ValueError(
+                f"{path}: {p.job_id}: color_target 'auto' needs the job's own "
+                "target stage; give an explicit path when reusing"
+            )
     return batch_name, batch_root, plans

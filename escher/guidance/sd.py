@@ -77,6 +77,10 @@ class Config:
     # AutoencoderKL.encode calls self.encoder directly, bypassing a wrapped forward.
     torch_compile: bool = False
 
+    # Independent noise draws averaged per SDS step (same timestep): 1/N gradient
+    # variance at N UNet evals. A run-to-run-consistency lever.
+    noise_samples: int = 1
+
 
 class StableDiffusion(nn.Module):
     def __init__(self, cfg: Config = Config()):
@@ -232,23 +236,6 @@ class StableDiffusion(nn.Module):
         text_embeddings: Float[Tensor, "BB 77 768"],
         t: Int[Tensor, "B"],
     ):
-        # predict the noise residual with unet, NO grad!
-        with torch.no_grad():
-            # add noise
-            noise = torch.randn_like(latents)  # TODO: use torch generator
-            latents_noisy = self.scheduler.add_noise(latents, noise, t)
-            # pred noise
-            latent_model_input = torch.cat([latents_noisy] * 2, dim=0)
-            noise_pred = self.forward_unet(
-                latent_model_input,
-                torch.cat([t] * 2),
-                encoder_hidden_states=text_embeddings,
-            )
-
-        # perform guidance (high scale from paper!)
-        noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-        noise_pred = noise_pred_text + self.cfg.guidance_scale * (noise_pred_text - noise_pred_uncond)
-
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
             w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
@@ -259,8 +246,32 @@ class StableDiffusion(nn.Module):
         else:
             raise ValueError(f"Unknown weighting strategy: {self.cfg.weighting_strategy}")
 
-        grad = w * (noise_pred - noise)
-        return grad
+        # Averaging several independent noise draws at the SAME timestep reduces
+        # per-step gradient variance by 1/N at N UNet evals (noise_samples > 1 is
+        # a run-to-run-consistency lever, not a quality lever per se).
+        n = max(int(self.cfg.noise_samples), 1)
+        grad = 0.0
+        for _ in range(n):
+            # predict the noise residual with unet, NO grad!
+            with torch.no_grad():
+                # add noise
+                noise = torch.randn_like(latents)  # TODO: use torch generator
+                latents_noisy = self.scheduler.add_noise(latents, noise, t)
+                # pred noise
+                latent_model_input = torch.cat([latents_noisy] * 2, dim=0)
+                noise_pred = self.forward_unet(
+                    latent_model_input,
+                    torch.cat([t] * 2),
+                    encoder_hidden_states=text_embeddings,
+                )
+
+            # perform guidance (high scale from paper!)
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+            noise_pred = noise_pred_text + self.cfg.guidance_scale * (
+                noise_pred_text - noise_pred_uncond
+            )
+            grad = grad + w * (noise_pred - noise)
+        return grad / n
 
     def compute_grad_sjc(
         self,

@@ -32,7 +32,7 @@ from escher.rendering.camera import orbit_views
 from escher.rendering.render_sphere_nvdiffrast import build_tiled_sphere, render_tiled_sphere
 
 
-def load_run(checkpoint: Path) -> tuple[SphereEscher, int]:
+def load_run(checkpoint: Path, ema: bool = False) -> tuple[SphereEscher, int]:
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
     args = OmegaConf.create(state["config"])
 
@@ -43,7 +43,7 @@ def load_run(checkpoint: Path) -> tuple[SphereEscher, int]:
     escher.output_dir = Path(args.OUTPUT_DIR)
     escher._init_geometry()
     escher._init_parameters()
-    iteration = escher.load_checkpoint(checkpoint)
+    iteration = escher.load_checkpoint(checkpoint, ema=ema)
     return escher, iteration
 
 
@@ -135,6 +135,7 @@ def finalize(
     out_dir: str | Path | None = None,
     turntable: bool = True,
     gutter: bool = True,
+    ema: bool = False,
 ) -> dict:
     """Turn a finished checkpoint into deliverables; callable by a driver.
 
@@ -147,8 +148,8 @@ def finalize(
     fish). Returns artifact paths plus ``geometry_ok`` -- the 4pi certificate.
     """
     checkpoint = Path(checkpoint)
-    escher, iteration = load_run(checkpoint)
-    print(f"loaded step {iteration} from {checkpoint}")
+    escher, iteration = load_run(checkpoint, ema=ema)
+    print(f"loaded step {iteration} from {checkpoint}{' (EMA texture)' if ema else ''}")
 
     if gutter:
         from escher.rendering.texture_mask import gutter_fill, uv_valid_mask
@@ -207,6 +208,7 @@ def main() -> None:
         tint=True if "TINT=1" in sys.argv[2:] else None,
         shade="SHADE=0" not in sys.argv[2:],
         gutter="GUTTER=0" not in sys.argv[2:],
+        ema="EMA=1" in sys.argv[2:],
     )
     if not result["geometry_ok"]:
         raise SystemExit(3)

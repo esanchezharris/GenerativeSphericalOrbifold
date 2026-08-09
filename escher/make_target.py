@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from omegaconf import OmegaConf
 
-from escher.shape_target import binarize_mask
+from escher.shape_target import binarize_mask, figure_mask_from_flat_ground
 
 DEFAULTS = OmegaConf.create(
     {
@@ -43,8 +43,76 @@ DEFAULTS = OmegaConf.create(
         "OUT_DIR": "assets/targets/gingerbread",
         "CHOOSE": -1,  # >= 0: skip generation, just re-point target.npy
         "DEVICE": "cuda",
+        # COLOR mode: full-color figure images (texture-style prompt) instead of
+        # silhouettes -- the anchor images for image-anchored texture init. The
+        # best candidate (largest clean figure in the plausibility band) is
+        # copied to color.png.
+        "COLOR": False,
     }
 )
+
+
+def generate_color(args) -> dict:
+    """Generate color figure candidates; pick the best into ``color.png``.
+
+    Same pipeline and auto-pick philosophy as the silhouette path: a candidate
+    counts only if it binarizes to one clean figure in the plausibility band
+    (the color image's own darkness against the white ground supplies the mask).
+    """
+    import shutil
+
+    import torch
+    from diffusers import StableDiffusionPipeline
+
+    out_dir = Path(args.OUT_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    device = str(args.get("DEVICE", "cuda"))
+    pipe = StableDiffusionPipeline.from_pretrained(
+        args.MODEL, torch_dtype=torch.float16, safety_checker=None,
+        requires_safety_checker=False,
+    ).to(device)
+    pipe.set_progress_bar_config(disable=True)
+
+    candidates = []
+    for i in range(args.N):
+        gen = torch.Generator(device=device).manual_seed(args.SEED + i)
+        raw = np.asarray(
+            pipe(
+                args.PROMPT,
+                negative_prompt=args.NEGATIVE,
+                num_inference_steps=args.STEPS,
+                guidance_scale=args.GUIDANCE,
+                height=args.SIZE,
+                width=args.SIZE,
+                generator=gen,
+            ).images[0]
+        )
+        imageio.imwrite(out_dir / f"color_{i:02d}.png", raw)
+        # The bake needs one figure on a FLAT ground of any color (measured: the
+        # model favors slate gray behind colorful flat-vector subjects). A
+        # patterned ground cannot be segmented and is gated out by its border
+        # color spread.
+        try:
+            mask, ground_std = figure_mask_from_flat_ground(raw)
+            area = float(mask.mean())
+        except ValueError:
+            area, ground_std = 0.0, 1.0
+        candidates.append((i, area, ground_std))
+        print(
+            f"color candidate {i}: figure area {area:.3f}, ground spread "
+            f"{ground_std:.3f}",
+            flush=True,
+        )
+
+    valid = [(i, a) for i, a, g in candidates if 0.08 <= a <= 0.6 and g <= 0.08]
+    if not valid:
+        raise ValueError(
+            "no color candidate with one clean figure on a FLAT ground -- adjust PROMPT"
+        )
+    best = max(valid, key=lambda t: t[1])[0]
+    shutil.copyfile(out_dir / f"color_{best:02d}.png", out_dir / "color.png")
+    print(f"color.png <- candidate {best}")
+    return {"chosen": best, "out_dir": str(out_dir)}
 
 
 def write_choice(out_dir: Path, index: int) -> None:
@@ -132,7 +200,7 @@ def main() -> None:
         write_choice(Path(args.OUT_DIR), int(args.CHOOSE))
     else:
         try:
-            generate(args)
+            generate_color(args) if args.get("COLOR", False) else generate(args)
         except ValueError as e:
             raise SystemExit(2) from e
 

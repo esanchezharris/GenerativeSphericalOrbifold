@@ -21,6 +21,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from omegaconf import OmegaConf
 
@@ -85,8 +86,16 @@ def eval_batch(root: Path, default_carve: Path, n_views: int = 30) -> None:
             img2, a2, _ = escher.render(1, mv=mv_iso, isolated=True, texture=flat)
             outline_view = (img2 * a2 + (1 - a2)).clamp(0, 1)[0].cpu().numpy()
 
+        # EMA panel when the checkpoint carries a trajectory average.
+        ema_view = None
+        if "texture_ema" in state:
+            escher.load_checkpoint(ckpt, ema=True)
+            with torch.no_grad():
+                img3, a3, _ = escher.render(1, mv=mv, tint=tint, shade_ambient=0.55)
+                ema_view = (img3 * a3 + (1 - a3)).clamp(0, 1)[0].cpu().numpy()
+
         rows.append((arm, bg, outline))
-        panels.append((arm, sphere_view, outline_view, bg, outline))
+        panels.append((arm, sphere_view, outline_view, ema_view, bg, outline))
 
     print(f"\n{'arm':24s} {'bg%':>7s} {'vs_tgt':>7s} {'drift':>7s} {'perim':>7s} {'flips':>5s}")
     for arm, bg, o in rows:
@@ -95,22 +104,36 @@ def eval_batch(root: Path, default_carve: Path, n_views: int = 30) -> None:
             f"{o['iou_vs_carve']:7.4f} {o['final_perim']:7.4f} {o['final_flips']:5d}"
         )
 
-    fig, axes = plt.subplots(2, len(panels), figsize=(3.6 * len(panels), 8.0))
-    for i, (arm, sphere_view, outline_view, bg, o) in enumerate(panels):
-        col = axes[:, i] if len(panels) > 1 else axes
+    n_rows = 3 if any(p[3] is not None for p in panels) else 2
+    fig, axes = plt.subplots(
+        n_rows, len(panels), figsize=(3.6 * len(panels), 4.0 * n_rows)
+    )
+    axes = np.atleast_2d(axes)
+    if axes.shape[0] != n_rows:
+        axes = axes.T
+    for i, (arm, sphere_view, outline_view, ema_view, bg, o) in enumerate(panels):
+        col = axes[:, i]
         col[0].imshow(sphere_view)
         col[0].set_title(
             f"{arm}\nbg {100 * bg['bg_frac']:.2f}% | vs-tgt {o['iou_vs_target']:.3f}",
             fontsize=9,
         )
-        col[1].imshow(outline_view)
-        col[1].set_title(
+        row = 1
+        if n_rows == 3:
+            if ema_view is not None:
+                col[1].imshow(ema_view)
+            col[1].set_title("EMA texture", fontsize=8)
+            row = 2
+        col[row].imshow(outline_view)
+        col[row].set_title(
             f"outline | drift {o['iou_vs_carve']:.3f} | perim {o['final_perim']:.3f}",
             fontsize=8,
         )
         for ax in col:
             ax.set_axis_off()
-    fig.suptitle(f"{root.name}: tinted sphere (top), outline alone (bottom)", fontsize=13)
+    fig.suptitle(
+        f"{root.name}: tinted sphere / EMA / outline alone", fontsize=13
+    )
     fig.tight_layout()
     fig.savefig(root / "comparison.png", dpi=110, bbox_inches="tight")
     print(f"\nwrote {root / 'comparison.png'}")

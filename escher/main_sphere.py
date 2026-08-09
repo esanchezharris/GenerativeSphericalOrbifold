@@ -261,14 +261,28 @@ class SphereEscher:
             self._W_good: torch.Tensor | None = self.W.detach().clone()
             shape_group = {"params": [self.W], "lr": a.LR_W}
         res = a.TEXTURE_RESOLUTION
+        init_path = a.get("TEXTURE_INIT_PATH", None)
         init_color = a.get("TEXTURE_INIT_COLOR", None)
-        if init_color is None:
+        if init_path:
+            # Image-anchored init (escher/texture_init.py): composition and
+            # palette are decided BEFORE step 0 instead of by early SDS noise.
+            arr = np.load(init_path)
+            if arr.shape != (res, res, 3):
+                raise ValueError(
+                    f"TEXTURE_INIT_PATH {init_path}: shape {arr.shape} != "
+                    f"({res}, {res}, 3)"
+                )
+            init = torch.as_tensor(arr, dtype=torch.float32)
+        elif init_color is None:
             init = torch.full((res, res, 3), 0.5, dtype=torch.float32)
         else:
             # A flat start (e.g. gingerbread tan) instead of neutral gray: SDS then spends
             # its budget on figure detail rather than on first fighting its way out of gray.
             init = torch.tensor(list(init_color), dtype=torch.float32).repeat(res, res, 1)
         self.texture = torch.nn.Parameter(init.to(self.device))
+        # Trajectory-average deliverable (TEXTURE_EMA_DECAY > 0): pure observer,
+        # never touches training.
+        self._texture_ema: torch.Tensor | None = None
         # group 0 is always the shape parameters; the freeze machinery zeroes its LR
         self.optimizer = torch.optim.Adam(
             [shape_group, {"params": [self.texture], "lr": a.LR_TEXTURE}]
@@ -307,6 +321,7 @@ class SphereEscher:
             grad_clip=[0, 2.0, 8.0, 1000] if a.CLIP_GRADIENTS_IN_SDS else None,
             enable_channels_last_format=bool(a.get("CHANNELS_LAST", False)),
             torch_compile=bool(a.get("TORCH_COMPILE", False)),
+            noise_samples=int(a.get("SDS_NOISE_SAMPLES", 1) or 1),
         )
         self.guidance = sd.StableDiffusion(cfg)
         # The silhouette pass shows the model a flat solid shape, so it gets a prompt that
@@ -986,6 +1001,8 @@ class SphereEscher:
             "optimizer": self.optimizer.state_dict(),
             "config": OmegaConf.to_container(self.args, resolve=True),
         }
+        if getattr(self, "_texture_ema", None) is not None:
+            payload["texture_ema"] = self._texture_ema.detach().cpu()
         if self.args.PARAM_MODE == "boundary":
             payload["P"] = self.P.detach().cpu()
         else:
@@ -1004,12 +1021,16 @@ class SphereEscher:
                 old.unlink(missing_ok=True)
         return tagged
 
-    def load_checkpoint(self, path: str | Path, reset_texture: bool = False) -> int:
+    def load_checkpoint(
+        self, path: str | Path, reset_texture: bool = False, ema: bool = False
+    ) -> int:
         """``reset_texture`` is a PER-CALL choice, never read from config: the flag ends
         up saved inside the checkpoint's own config, and reading it ambiently made
         render_final load a texture-phase checkpoint as flat init blobs. Only run()'s
         cross-phase RESUME wants it (shape from the checkpoint, this run's fresh
-        texture -- the shape phase never trained its texture)."""
+        texture -- the shape phase never trained its texture). ``ema`` loads the
+        trajectory-averaged texture instead of the final step, when the
+        checkpoint carries one."""
         state = torch.load(path, map_location="cpu", weights_only=False)
 
         # A checkpoint whose geometry settings differ from this run's silently
@@ -1032,7 +1053,13 @@ class SphereEscher:
             else:
                 self.W.copy_(state["W"])
             if not reset_texture:
-                self.texture.copy_(state["texture"].to(self.device))
+                source = "texture"
+                if ema:
+                    if "texture_ema" not in state:
+                        print("!! load_checkpoint: ema requested but not in checkpoint")
+                    else:
+                        source = "texture_ema"
+                self.texture.copy_(state[source].to(self.device))
         self.optimizer.load_state_dict(state["optimizer"])
         # The loaded parameters need a fresh solve; a cache from before the load
         # would render the OLD shape forever. Revert anchors must track the LOADED
@@ -1135,8 +1162,20 @@ class SphereEscher:
         start = time.time()
         last_print = (start, first_step)
         first_log = True
+        ema_decay = float(a.get("TEXTURE_EMA_DECAY", 0.0) or 0.0)
         for iteration in range(first_step, a.N_STEPS + 1):
             info = self.step(iteration)
+
+            if ema_decay > 0:
+                # The deliverable becomes the smoothed trajectory average
+                # instead of whichever texture step N_STEPS happened to be --
+                # the endpoint-luck component of run-to-run variance.
+                if self._texture_ema is None:
+                    self._texture_ema = self.texture.detach().clone()
+                else:
+                    self._texture_ema.mul_(ema_decay).add_(
+                        self.texture.detach(), alpha=1.0 - ema_decay
+                    )
 
             if iteration % 10 == 0:
                 # Truncate only when this run STARTS the history (step 0); an

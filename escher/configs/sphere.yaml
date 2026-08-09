@@ -195,6 +195,20 @@ RESET_SHAPE_OPTIMIZER_ON_RESUME: false
 W_REVERT_ON_FOLD: false
 # The carve's outline-smoothness prior, live during the joint window (0 = off).
 BOUNDARY_SMOOTH_WEIGHT_W: 0.0
+### first-time-right levers (round 4; all default off/null)
+# Image-anchored texture init (escher/texture_init.py bakes it): an npy of shape
+# (TEXTURE_RESOLUTION^2, 3) replacing the flat init -- composition and palette
+# decided BEFORE step 0 instead of by early SDS noise (the dominant source of
+# run-to-run variance).
+TEXTURE_INIT_PATH: null
+# Trajectory-average deliverable: checkpoint carries texture_ema alongside the
+# raw texture (load with ema=True / EMA=1). Pure observer. 0 = off; 0.998 gives
+# an effective window of ~500 steps.
+TEXTURE_EMA_DECAY: 0.0
+# Independent SDS noise draws averaged per step (same timestep): 1/N gradient
+# variance at N UNet evals (~+0.18 s/step at 2).
+SDS_NOISE_SAMPLES: 1
+
 # Isolated-view share for the FROZEN tail only (null = ISOLATED_TILE_FRACTION,
 # the historical behavior). Lowering it (e.g. 0.25) makes the frozen texture
 # answer mostly to TILED Escher-context views -- the round-2 lever against the

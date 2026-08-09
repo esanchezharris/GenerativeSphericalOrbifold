@@ -97,6 +97,47 @@ def binarize_mask(
     return mask.astype(np.float32)
 
 
+def figure_mask_from_flat_ground(
+    image: np.ndarray, dist_threshold: float = 0.12
+) -> tuple[np.ndarray, float]:
+    """Figure mask for a subject on a FLAT ground of ANY color.
+
+    ``binarize_mask`` assumes dark-figure-on-light; color anchor images come back
+    on whatever flat ground the model prefers (measured: consistently slate gray
+    for colorful flat-vector subjects). Here the ground color is estimated from
+    the border median and the figure is everything far from it -- largest
+    component, holes filled, same cleanup as the silhouette path.
+
+    Returns ``(mask, ground_std)``; ``ground_std`` is the border's color spread,
+    the caller's gate for "is the ground actually flat" (patterned grounds have
+    high spread and CANNOT be segmented this way).
+    """
+    img = np.asarray(image, dtype=np.float64)
+    if img.max() > 1.0:
+        img = img / 255.0
+    img = img[..., :3]
+    border = np.concatenate(
+        [
+            img[:8].reshape(-1, 3),
+            img[-8:].reshape(-1, 3),
+            img[:, :8].reshape(-1, 3),
+            img[:, -8:].reshape(-1, 3),
+        ]
+    )
+    ground = np.median(border, axis=0)
+    ground_std = float(np.linalg.norm(border - ground, axis=-1).std())
+
+    mask = np.linalg.norm(img - ground, axis=-1) > dist_threshold
+    if not mask.any():
+        raise ValueError("figure_mask_from_flat_ground: no figure found")
+    labels, n = ndimage.label(mask)
+    if n > 1:
+        sizes = ndimage.sum_labels(mask, labels, index=np.arange(1, n + 1))
+        mask = labels == (1 + int(np.argmax(sizes)))
+    mask = ndimage.binary_fill_holes(mask)
+    return mask.astype(np.float32), ground_std
+
+
 def _moments(mask: np.ndarray) -> tuple[np.ndarray, float]:
     """(centroid (row, col), RMS radius), intensity-weighted so soft alphas work too."""
     w = np.asarray(mask, dtype=np.float64)
@@ -145,6 +186,7 @@ def align_mask_to(
     corner_weight: float = 0.0,
     translation_px: float = 0.0,
     translation_steps: int = 5,
+    companion: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict, float]:
     """Place ``target`` over ``reference`` by a similarity transform, maximizing IoU.
 
@@ -283,6 +325,28 @@ def align_mask_to(
     params["area_measure"] = "solid_angle" if weights is not None else "pixels"
     if dists is not None:
         params["corner_dist_px"] = [float(d) for d in dists]
+
+    if companion is not None:
+        # Warp a companion array (e.g. the COLOR image whose mask was aligned)
+        # with the exact winning transform -- image-anchored texture init needs
+        # the colors in the same frame as the aligned mask. Bilinear, white
+        # out-of-frame (the generation background).
+        comp = np.asarray(companion, dtype=np.float64)
+        theta = np.deg2rad(params["angle_deg"])
+        rot = np.array(
+            [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
+        )
+        M = rot.T / params["scale"]
+        delta = np.asarray(params.get("delta_px", (0.0, 0.0)), dtype=np.float64)
+        offset = c_tgt - M @ (c_ref + delta)
+        chans = [
+            ndimage.affine_transform(
+                comp[..., c], M, offset=offset, output_shape=ref.shape,
+                order=1, cval=1.0,
+            )
+            for c in range(comp.shape[-1])
+        ]
+        params["companion"] = np.stack(chans, axis=-1).astype(np.float32)
     return aligned.astype(np.float32), params, iou
 
 
