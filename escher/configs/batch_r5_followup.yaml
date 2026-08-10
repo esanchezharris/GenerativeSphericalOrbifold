@@ -1,0 +1,26 @@
+# Round-5 follow-up: the middle-dose regularizer arm (user-requested), judged
+# against gemfull_img_s0 (same carve, anchor, seed -- only the 2% area regs differ).
+#
+#   python -m escher.pipeline escher/configs/batch_r5_followup.yaml
+
+batch_name: gem_full_followup
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/acceptance_fish/fish_run1/carve_s0/checkpoint.pt
+  prompt: "a fish with scales and fins, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_gemmid.yaml]
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+      TEXTURE_EMA_DECAY: 0.998
+    render:
+      TINT: true
+
+jobs:
+  - figure: gemmid_img_s0
+    color_target: assets/targets/fish64/color.png
