@@ -57,8 +57,26 @@ def measure(texture_ckpt: str | Path, carve_ckpt: str | Path) -> dict:
     escher.load_checkpoint(carve_ckpt, reset_texture=True)
     carve_alpha, carve_flips, carve_perim = _silhouette(escher, ctx)
 
-    escher.load_checkpoint(texture_ckpt, reset_texture=True)
-    final_alpha, final_flips, final_perim = _silhouette(escher, ctx)
+    # A checkpoint from a DIFFERENT mesh (hires KITE_N, another orbifold) cannot
+    # load into the carve's build; give it its own, but keep the CARVE's framing
+    # knobs so both masks land in the same pixel frame. Same-geometry checkpoints
+    # keep the single-build path bit-for-bit.
+    tex_state = torch.load(texture_ckpt, map_location="cpu", weights_only=False)
+    tex_cfg = OmegaConf.create(tex_state["config"])
+    same_mesh = all(
+        tex_cfg.get(k) == args.get(k)
+        for k in ("PARAM_MODE", "ORBIFOLD_CONES", "KITE_N")
+    )
+    if same_mesh:
+        escher_final, ctx_final = escher, ctx
+    else:
+        tex_cfg.DEVICE = "cpu"
+        tex_cfg.OUTPUT_DIR = str(texture_ckpt.parent / "outline_tmp")
+        escher_final = build_shape_run(tex_cfg)
+        ctx_final = make_context(escher_final, args)
+
+    escher_final.load_checkpoint(texture_ckpt, reset_texture=True)
+    final_alpha, final_flips, final_perim = _silhouette(escher_final, ctx_final)
 
     target_png = carve_ckpt.parent / "target_aligned.png"
     target = imageio.imread(target_png).astype(np.float32)

@@ -48,15 +48,21 @@ def eval_batch(root: Path, default_carve: Path, n_views: int = 30) -> None:
     if not arms:
         raise SystemExit(f"no */tex_s0/checkpoint.pt under {root}")
 
-    rows, panels = [], []
+    rows, panels, failed = [], [], []
     for arm_dir in arms:
         arm = arm_dir.name
         ckpt = arm_dir / "tex_s0" / "checkpoint.pt"
         own_carve = arm_dir / "carve_s0" / "checkpoint.pt"
         carve = own_carve if own_carve.exists() else default_carve
 
-        bg = measure_bg(ckpt, n_views=n_views)
-        outline = measure_outline(ckpt, carve)
+        # One broken arm must not kill the whole morning report.
+        try:
+            bg = measure_bg(ckpt, n_views=n_views)
+            outline = measure_outline(ckpt, carve)
+        except Exception as e:  # noqa: BLE001 -- report and move on
+            print(f"{arm}: metrics failed ({type(e).__name__}: {e}), skipping arm")
+            failed.append(arm)
+            continue
 
         state = torch.load(ckpt, map_location="cpu", weights_only=False)
         args = OmegaConf.create(state["config"])
@@ -137,6 +143,8 @@ def eval_batch(root: Path, default_carve: Path, n_views: int = 30) -> None:
     fig.tight_layout()
     fig.savefig(root / "comparison.png", dpi=110, bbox_inches="tight")
     print(f"\nwrote {root / 'comparison.png'}")
+    if failed:
+        print(f"FAILED arms (see messages above): {', '.join(failed)}")
 
 
 def main() -> None:
