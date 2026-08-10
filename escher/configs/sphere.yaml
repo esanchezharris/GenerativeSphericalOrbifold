@@ -55,6 +55,9 @@ COTANGENT_RELATIVE_WEIGHTS: false
 TEXTURE_RESOLUTION: 256
 LR_TEXTURE: 0.01
 CLAMP_TEXTURE: true
+# Upstream GEM parity: StepLR x0.1 at 80% of N_STEPS on BOTH parameter groups
+# (their SCHEDULER: step default). false = constant LRs = every prior run.
+LR_STEP_SCHEDULE: false
 
 ### rendering
 IMAGE_BATCH_SIZE: 4   # views per step. 12 GB VRAM: 4 at 512 fits, 6 is tight.
@@ -68,6 +71,11 @@ TILE_CENTRIC_VIEWS: true
 CAMERA_DISTANCE: 1.4  # cap half-angle ~44 deg: one tile dominant, neighbours visible
 CAMERA_FOV: 40.0
 VIEW_JITTER_DEG: 12.0
+# GEM's random-rigid augmentation for ISOLATED training views: std-dev (degrees) of a
+# random roll about the view axis, view 0 kept clean (upstream vertex_augmentation is
+# randn * pi/4 = 45 deg std). 0 = off = every prior run. Without it the isolated pass
+# always frames the tile at one fixed orientation and the outline overfits that pose.
+ISOLATED_ROLL_DEG: 0.0
 RANDOM_BACKGROUND: true
 # Snapshots and turntables frame the whole sphere, unlike the close-up training views.
 PREVIEW_DISTANCE: 3.0

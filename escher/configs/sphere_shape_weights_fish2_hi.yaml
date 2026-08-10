@@ -1,0 +1,18 @@
+# The fish2 carve recipe at DOUBLE boundary resolution -- overlay listed AFTER
+# sphere_shape_weights_fish2.yaml:
+#
+#   python escher/main_shape.py \
+#     "CONF_FILE=[configs/sphere_shape_weights_fish2.yaml,configs/sphere_shape_weights_fish2_hi.yaml]" \
+#     TARGET_MASK=<target.npy>
+#
+# KITE_N 20 gives the (2,3,4) kite an 80-vertex boundary loop, and equivariance
+# halves the free half to ~40 -- upstream GEM articulates its outlines with a
+# 40x40-160+ boundary (paper: "regular triangulation of the square, with 40x40
+# vertices"; repo default 50x50 -> 196 boundary verts). Fins, tail forks and
+# mouths are exactly the small-scale features 40 free vertices cannot spell.
+# KITE_N 40 -> 160 boundary vertices (~80 free), the closest sphere equivalent.
+#
+# Cost: verts 441 -> 1681, so the per-step solve + IFT adjoint are ~4-8x; on the
+# GPU carve that is minutes, on the 7000-step joint texture run ~+0.1-0.2 s/step.
+KITE_N: 40
+OUTPUT_DIR: "output/sphere_shape_fish2_hi"

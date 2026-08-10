@@ -287,6 +287,15 @@ class SphereEscher:
         self.optimizer = torch.optim.Adam(
             [shape_group, {"params": [self.texture], "lr": a.LR_TEXTURE}]
         )
+        # Upstream GEM parity (main.py init_scheduler): StepLR x0.1 at 80% of the run,
+        # both parameter groups. Freeze-safe: apply_shape_freeze re-zeroes group 0's LR
+        # before every frozen optimizer.step, undoing the scheduler's recompute. State
+        # is not checkpointed -- a resume restarts the 80% count from its own step 0.
+        self._lr_sched = None
+        if a.get("LR_STEP_SCHEDULE", False):
+            self._lr_sched = torch.optim.lr_scheduler.StepLR(
+                self.optimizer, step_size=max(1, int(0.8 * a.N_STEPS)), gamma=0.1
+            )
 
         # Reference state for the equal-area regularizer: the per-face solid angles of
         # the state the run actually STARTS in -- the uniform-weight solve -- not the raw
@@ -606,6 +615,7 @@ class SphereEscher:
         tint: torch.Tensor | None = None,
         shade_ambient: float | None = None,
         points: torch.Tensor | None = None,
+        roll_deg: float = 0.0,
     ):
         """Render the tiling, or a single tile alone against the background.
 
@@ -636,6 +646,7 @@ class SphereEscher:
                     self.args.ISOLATED_DISTANCE if isolated else self.args.CAMERA_DISTANCE
                 ),
                 angular_jitter_deg=self.args.VIEW_JITTER_DEG,
+                roll_deg=roll_deg,
             )
         images, alpha = render_tiled_sphere(
             sphere,
@@ -777,9 +788,20 @@ class SphereEscher:
         if isolated and not frozen and drop_p > 0:
             tex_in = drop_textures(self.texture, a.IMAGE_BATCH_SIZE, drop_p)
 
+        # GEM's random-rigid augmentation, isolated + unfrozen only: a roll about the
+        # view axis so the outline is sculpted at many orientations, not one upright
+        # pose. Frozen-tail cadence is deliberately untouched (0 = every prior run).
+        roll_deg = 0.0
+        if isolated and not frozen:
+            roll_deg = float(a.get("ISOLATED_ROLL_DEG", 0.0) or 0.0)
+
         with self.timer.phase("render"):
             images, alpha, points = self.render(
-                a.IMAGE_BATCH_SIZE, isolated=isolated, points=points_in, texture=tex_in
+                a.IMAGE_BATCH_SIZE,
+                isolated=isolated,
+                points=points_in,
+                texture=tex_in,
+                roll_deg=roll_deg,
             )
 
         if a.RANDOM_BACKGROUND:
@@ -879,6 +901,8 @@ class SphereEscher:
                 self.apply_shape_freeze()
 
             self.optimizer.step()
+            if self._lr_sched is not None:
+                self._lr_sched.step()
 
         with self.timer.phase("stats"):
             areas = np.abs(

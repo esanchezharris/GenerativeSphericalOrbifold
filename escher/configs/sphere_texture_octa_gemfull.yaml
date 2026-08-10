@@ -1,0 +1,62 @@
+# GEM-PARITY FULL-RUN JOINT -- overlay, listed AFTER sphere_texture.yaml +
+# sphere_texture_octa.yaml (which stay byte-identical):
+#
+#   python escher/main_sphere.py "CONF_FILE=[configs/sphere_texture.yaml,configs/sphere_texture_octa.yaml,configs/sphere_texture_octa_gemfull.yaml]" \
+#       RESUME=<carve>/checkpoint.pt START_STEP=0 ...
+#
+# Round-5 re-review of the paper (arxiv 2309.14564) and upstream code found the
+# sphere's joint recipe inverted every mechanism GEM uses to make the OUTLINE
+# become the subject:
+#
+#   upstream (base.yaml + main.py)              sphere joint overlay (round 2-4)
+#   ------------------------------              --------------------------------
+#   joint for the ENTIRE run                    joint window K=600 of 7000
+#     (ONLY_TEXTURE_FROM_THIS_POINT: 7000)        then 6400 frozen-shape steps
+#   LR 0.1 shape vs 0.01 texture (10:1) --      LR_W 0.03 (3:1)
+#     "such that textures emerge slower,
+#     giving the shape time to form" (paper)
+#   ~ZERO shape regularization                  EQUAL_AREA 500 + AREA_TAIL 800
+#     (W_REG 0.0, equal-area 0.1,                 + BOUNDARY_SMOOTH_W 500
+#      no smoothness term at all)
+#   random rigid roll (std 45 deg) per render   one fixed upright framing
+#   StepLR x0.1 at 80%                          constant LRs
+#
+# Measured symptom of the old recipe: the K=600 window SMOOTHED the outline
+# (perim 1.20 -> 1.03) instead of articulating it -- 600 steps of high-noise-
+# anneal SDS under carve-calibrated regularizers can only round corners off.
+#
+# This overlay is those five rows, upstream side. What it deliberately KEEPS
+# from the measured sphere recipe: guidance 30 + TV prior (50 drove saturation),
+# the timestep anneal (upstream samples t uniform all run; our compose->polish
+# anneal gives MORE low-noise late steps, which is where fine outline detail
+# comes from), drop 50, NO crop (user-verdict twice: crop resurrects
+# figure-on-tile), batch 4 (VRAM), and the full fold-safety kit -- the spherical
+# solve has NO injectivity guarantee (unlike planar Tutte), so W_REVERT_ON_FOLD
+# stands in for upstream's Theorem 1.
+
+# Joint for the whole run: N_STEPS is 7000 (octa overlay); iteration never
+# reaches the latch. The carve is still the init -- SDS refines a fish, not a
+# square, which is the one structural advantage we keep over upstream.
+FREEZE_SHAPE_AFTER: 7000
+
+LR_W: 0.1
+LR_STEP_SCHEDULE: true
+COTANGENT_RELATIVE_WEIGHTS: true
+
+# GEM's regularization level. W_REGULARIZATION 0.02 is kept (upstream gets the
+# same magnitude-squashing from sigmoid + W_RANGE; our cotangent-relative logits
+# need the explicit prior against runaway magnitudes).
+EQUAL_AREA_WEIGHT: 0.0
+AREA_TAIL_WEIGHT: 0.0
+BOUNDARY_SMOOTH_WEIGHT_W: 0.0
+W_REGULARIZATION: 0.02
+
+# Random-rigid parity: upstream rolls every render but the first by randn*pi/4.
+ISOLATED_ROLL_DEG: 45.0
+
+# GEM's pure-outline signal: half of each isolated batch renders flat gray.
+TEXTURE_DROP_PROB: 50
+
+# Safety kit (sphere.yaml comments): mandatory with zero area regularization.
+RESET_SHAPE_OPTIMIZER_ON_RESUME: true
+W_REVERT_ON_FOLD: true

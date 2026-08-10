@@ -8,6 +8,7 @@ the freeze-latch certified-state guard, and honest checkpoint-mismatch warnings.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from omegaconf import OmegaConf
 
@@ -114,3 +115,21 @@ def test_boundary_loop_property_is_a_closed_walk(tmp_path):
     loop = escher.boundary_loop_t
     assert loop.ndim == 1 and loop.numel() >= 4
     assert loop.unique().numel() == loop.numel(), "no repeated vertices"
+
+
+def test_lr_step_schedule_decays_both_groups_at_80_percent(tmp_path):
+    """GEM parity: upstream's StepLR drops shape AND texture LRs x0.1 at 80%."""
+    escher, args = weights_escher(tmp_path, LR_STEP_SCHEDULE=True, N_STEPS=10)
+    assert escher._lr_sched is not None
+    lr0 = [g["lr"] for g in escher.optimizer.param_groups]
+    for _ in range(8):  # step_size = int(0.8 * 10)
+        escher.optimizer.step()
+        escher._lr_sched.step()
+    lr1 = [g["lr"] for g in escher.optimizer.param_groups]
+    for before, after in zip(lr0, lr1):
+        assert after == pytest.approx(before * 0.1, rel=1e-6)
+
+
+def test_lr_step_schedule_defaults_off(tmp_path):
+    escher, _ = weights_escher(tmp_path)
+    assert escher._lr_sched is None

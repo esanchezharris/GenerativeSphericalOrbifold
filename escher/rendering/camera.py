@@ -141,6 +141,7 @@ def tile_centric_views(
     n_views: int,
     distance: float = 2.0,
     angular_jitter_deg: float = 12.0,
+    roll_deg: float = 0.0,
     generator: torch.Generator | None = None,
 ) -> Tensor:
     """``(n_views, 4, 4)`` views, each framing one tile rather than the whole sphere.
@@ -159,6 +160,12 @@ def tile_centric_views(
         tile_centers: ``(n_tiles, 3)`` unit vectors toward each tile's centroid.
         distance: camera distance from the sphere centre. Smaller crops in harder.
         angular_jitter_deg: random tilt away from the exact tile centre, for view diversity.
+        roll_deg: std-dev of a random roll about the view axis (degrees). The planar
+            pipeline's ``vertex_augmentation`` rotates the tile by ``randn() * pi/4``
+            for every batch element but the first, so score distillation never sees
+            the figure at one fixed orientation; without it the sphere's isolated
+            views always frame the tile upright and the outline can overfit that
+            single pose. View 0 stays unrolled, mirroring upstream's clean element.
     """
     tile_centers = torch.as_tensor(tile_centers, dtype=torch.float32)
     n_tiles = tile_centers.shape[0]
@@ -178,7 +185,21 @@ def tile_centric_views(
         directions = directions * torch.cos(angle) + tangent * torch.sin(angle)
         directions = directions / directions.norm(dim=-1, keepdim=True)
 
-    return look_at(directions * distance)
+    mv = look_at(directions * distance)
+
+    if roll_deg > 0:
+        theta = torch.randn(n_views, generator=generator) * math.radians(roll_deg)
+        theta[0] = 0.0
+        cos, sin = torch.cos(theta), torch.sin(theta)
+        # Roll = rotation in the camera's own x-y plane, composed AFTER world->view.
+        rz = torch.eye(4).repeat(n_views, 1, 1)
+        rz[:, 0, 0] = cos
+        rz[:, 0, 1] = -sin
+        rz[:, 1, 0] = sin
+        rz[:, 1, 1] = cos
+        mv = rz @ mv
+
+    return mv
 
 
 def orbit_views(n: int, distance: float = 3.0, elevation_deg: float = 20.0) -> Tensor:

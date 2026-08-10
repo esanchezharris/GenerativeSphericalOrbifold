@@ -1,0 +1,66 @@
+# Round 5 -- GEM-parity FULL-RUN JOINT: make the tile OUTLINE itself become the
+# fish, the original vision of combining spherical orbifold Tutte embeddings
+# with Generative Escher Meshes. See sphere_texture_octa_gemfull.yaml for the
+# paper/code deltas this recipe closes.
+#
+#   python -m escher.pipeline escher/configs/batch_gem_full.yaml
+#
+# Prerequisites (prep script, run once before launch):
+#   - runs/gem_full/prep/carve_hi/checkpoint.pt   (fish2 recipe at KITE_N 40, GPU ~10 min)
+#   - runs/gem_full/prep/carve_identity/checkpoint.pt  (undeformed kite, CPU seconds)
+#   - assets/targets/fish64/color.png             (round-4 color anchor, exists)
+#
+# Morning eval:
+#   python escher/sanity_checks/eval_specificity_batch.py ROOT=runs/gem_full \
+#       CARVE=runs/acceptance_fish/fish_run1/carve_s0/checkpoint.pt
+#   (drift-vs-carve is only meaningful for the KITE_N-20 arms; hires/pure are
+#   judged on their outline panels.)
+
+batch_name: gem_full
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/acceptance_fish/fish_run1/carve_s0/checkpoint.pt
+  prompt: "a fish with scales and fins, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml]
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+      TEXTURE_EMA_DECAY: 0.998
+    render:
+      TINT: true
+
+jobs:
+  - figure: gemfull_img_s0       # headline: full-run joint + image anchor
+    color_target: assets/targets/fish64/color.png
+
+  - figure: gemfull_noimg_s0     # paper-faithful: "textures emerge slower, giving
+    # the shape time to form" -- does the anchor help or block outline motion?
+
+  - figure: gemfull_img_s1       # the process at seed 1 (invariance check)
+    color_target: assets/targets/fish64/color.png
+    stages:
+      texture:
+        SEED: 1
+
+  - figure: gemfull_guard_s0     # insurance: 10% of the old area regs, in case
+    color_target: assets/targets/fish64/color.png
+    stages:                      # zero-reg degenerates the mesh into slivers
+      texture:
+        EQUAL_AREA_WEIGHT: 50.0
+        AREA_TAIL_WEIGHT: 80.0
+
+  - figure: gemfull_hires_s0     # 160-boundary-vert articulation ceiling test
+    reuse_carve: runs/gem_full/prep/carve_hi/checkpoint.pt
+    color_target: assets/targets/fish64/color.png
+    stages:
+      texture:
+        KITE_N: 40               # must match the carve or W is misinterpreted
+
+  - figure: gempure_s0           # the literal paper method on the sphere: start
+    reuse_carve: runs/gem_full/prep/carve_identity/checkpoint.pt
+    # from the undeformed kite, no image anchor, SDS sculpts everything

@@ -13,6 +13,7 @@ from escher.rendering.camera import (
     orbit_views,
     perspective,
     random_views,
+    tile_centric_views,
 )
 
 
@@ -159,6 +160,49 @@ def test_all_views_see_the_sphere_in_front_of_the_camera():
     for mv in random_views(12, distance=3.0):
         view_z = apply(mv, pts)[:, 2]
         assert (view_z < 0).all(), "part of the sphere fell behind the camera"
+
+
+# ------------------------------------------------------------------ roll augmentation
+def test_roll_keeps_the_first_view_clean():
+    """GEM's convention: batch element 0 is never augmented (upstream keeps imb==0
+    at the identity), so snapshots and the drop[0]=False element stay comparable."""
+    center = torch.tensor([[0.0, 0.0, 1.0]])
+    g0 = torch.Generator().manual_seed(7)
+    g1 = torch.Generator().manual_seed(7)
+    plain = tile_centric_views(center, 4, distance=2.4, angular_jitter_deg=5.0, generator=g0)
+    rolled = tile_centric_views(
+        center, 4, distance=2.4, angular_jitter_deg=5.0, roll_deg=45.0, generator=g1
+    )
+    assert torch.allclose(plain[0], rolled[0], atol=1e-6)
+    assert not torch.allclose(plain[1:], rolled[1:], atol=1e-4)
+
+
+def test_roll_rotates_about_the_view_axis():
+    """Rolling must spin the image plane only: the tile center stays dead ahead."""
+    center = torch.tensor([[1.0, 0.0, 0.0]])
+    mv = tile_centric_views(center, 6, distance=2.0, angular_jitter_deg=0.0, roll_deg=60.0)
+    for i in range(6):
+        out = apply(mv[i], center)[0]
+        assert out[0].abs() < 1e-5 and out[1].abs() < 1e-5, "center left the view axis"
+        assert out[2] == pytest.approx(-1.0, abs=1e-5)  # distance 2 to a unit vector
+
+
+def test_roll_stays_rigid():
+    center = torch.tensor([[0.0, 1.0, 0.0]])
+    mv = tile_centric_views(center, 5, distance=2.0, roll_deg=45.0)
+    for i in range(5):
+        rot = mv[i, :3, :3]
+        assert torch.allclose(rot @ rot.T, torch.eye(3), atol=1e-5)
+        assert torch.det(rot) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_zero_roll_is_the_previous_behavior():
+    center = torch.tensor([[0.0, 0.0, 1.0]])
+    g0 = torch.Generator().manual_seed(3)
+    g1 = torch.Generator().manual_seed(3)
+    a = tile_centric_views(center, 4, distance=2.4, generator=g0)
+    b = tile_centric_views(center, 4, distance=2.4, roll_deg=0.0, generator=g1)
+    assert torch.allclose(a, b)
 
 
 def test_sphere_fits_inside_the_frustum():
