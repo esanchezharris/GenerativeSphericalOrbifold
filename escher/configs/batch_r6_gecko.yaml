@@ -1,0 +1,39 @@
+# Round-6 gecko retry: the auto color anchor failed the flat-ground gate (the
+# model paints geckos on leaves; 4 tries at the derived prompt all had ground
+# spread 0.22-0.61 vs the 0.08 gate). Assets regenerated out-of-band with the
+# fish-proven flat-vector anchor phrasing (color.png ground spread 0.016) and
+# a 32-candidate silhouette sheet (target.npy <- candidate 30, area 0.457).
+# Template switched to flat-vector per the fish 2x2: it is the seed-stable
+# default of the frozen recipe (cartoon drifted to an eye motif at seed 1).
+#
+#   python -m escher.pipeline escher/configs/batch_r6_gecko.yaml
+
+batch_name: r6_gecko
+runs_root: runs
+
+jobs:
+  - figure: gecko
+    orbifold: [2, 3, 4]
+    texture_seeds: [0]
+    reuse_targets: runs/r6/gecko_targets
+    color_target: runs/r6/gecko_targets/color.png
+    prompt: "a gecko lizard with a curled tail and splayed toes, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+    seeds: [0]
+    stages:
+      screen:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml]
+        TARGET_SWEEP_STEPS: 150
+        KEEP_CHECKPOINTS: 1
+      carve:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml, configs/sphere_shape_weights_fish2_hi.yaml]
+        SHAPE_STEPS: 1500
+        KEEP_CHECKPOINTS: 2
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml]
+        KITE_N: 40
+        TORCH_COMPILE: true
+        TIMING: true
+        KEEP_CHECKPOINTS: 5
+        TEXTURE_EMA_DECAY: 0.998
+      render:
+        TINT: true
