@@ -180,13 +180,38 @@ gingerbread at 0.726 reads as a decorated star — **IoU is a weak proxy for leg
 What matters is where the residual error lands. A fish tolerates a fattened body; a
 humanoid does not tolerate missing limbs.
 
+### The subject-as-tile recipe (rounds 5–6, 2026-08-11)
+
+The carve numbers above describe the deterministic shape phase. The final
+recipe — `configs/sphere_texture_octa_final.yaml` — goes further: it re-reads
+the original Generative Escher Meshes method and runs shape+texture **jointly
+for the entire 7000 steps** (shape LR 10× texture, ~zero shape regularization,
+random roll augmentation, StepLR, texture-drop 50), from a KITE_N-40 carve with
+an image-anchored texture init, under the weights-mode fold-revert safety net
+(spherical Tutte has no planar injectivity theorem; measured: **zero folds and
+zero reverts across >60k joint steps**). The outline articulates instead of
+smoothing — the tile silhouette itself reads as the subject.
+
+Measured along the way: a stock run of the upstream planar code does *not*
+reproduce the paper's figures (its showcases are curated); the minimal
+`"A professional cartoon of X, a masterpiece"` template forms subject-shaped
+outlines where style-piles dilute them, but the flat-vector style prompt is
+the seed-stable default on the sphere; the image anchor — not the prompt or
+guidance — supplies saturation; and the **figure's silhouette phrasing is a
+first-class lever**: a "chubby, arms hugged to the body" gingerbread carved
+0.830 where the default phrasing managed 0.788, and turned tray-ground filler
+into corner star pockets. Showcase runs: `gemfull_hires_s0` / `fish_hires_s1`
+(fish), `ginger_chunky` (gingerbread, + chroma floor 25), `gecko`.
+
 ## Current limitations
 
-The gingerbread man remains the honest failure case: at its reachability ceiling the tiles
-read as decorated cookies rather than figures. `configs/` keeps the alternative for that
-case — a smaller `ISOLATED_DISTANCE` makes score distillation paint a recognizable figure
-*inside* each tile instead of icing its border (`output/texD_figure_in_tile`), which is
-less Escher-pure but more legible.
+The gingerbread man was the honest failure case for two full attempts — cookies
+painted on a gray tray — until the figure-geometry fix above; what remains true
+is that limbed figures need their silhouette *phrased for tiling* (limbs hugged
+to the body), where curled fish and reptiles tile as the model draws them.
+`configs/` keeps the historical alternative — a smaller `ISOLATED_DISTANCE`
+makes score distillation paint a recognizable figure *inside* each tile
+(`output/texD_figure_in_tile`), less Escher-pure but always legible.
 
 Untried levers: an area-preserving (authalic) rather than harmonic UV, texel-density
 normalization of the accumulated texture gradients, and a VSD-style objective. On that
