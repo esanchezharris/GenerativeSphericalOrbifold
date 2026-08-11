@@ -1,0 +1,30 @@
+# Gingerbread showcase phase 2: the planar prompt-lab WINNER template on the
+# same carve + color anchor as phase 1 -- launch AFTER batch_gingerbread.yaml
+# completes (reuse paths must exist).
+#
+# Lab verdict (runs/gem_full/lab_*): "A professional cartoon of a [subject],
+# a masterpiece" forms subject-shaped tile outlines; style-piles and viewpoint
+# clauses dilute them; guidance level does not explain the planar washout.
+#
+#   python -m escher.pipeline escher/configs/batch_gingerbread2.yaml
+
+batch_name: gingerbread2
+runs_root: runs
+
+jobs:
+  - figure: gingerbread_cartoon
+    orbifold: [2, 3, 4]
+    texture_seeds: [0]
+    reuse_carve: runs/gingerbread/gingerbread_img/carve_s0/checkpoint.pt
+    color_target: runs/gingerbread/gingerbread_img/targets/color.png
+    prompt: "A professional cartoon of a cute gingerbread man, a masterpiece"
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml]
+        KITE_N: 40
+        TORCH_COMPILE: true
+        TIMING: true
+        KEEP_CHECKPOINTS: 5
+        TEXTURE_EMA_DECAY: 0.998
+      render:
+        TINT: true
