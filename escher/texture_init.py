@@ -49,6 +49,7 @@ def bake_texture_init(
     color_image: str | Path,
     out_path: str | Path,
     fill: str = "nearest",
+    aligned_override: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> Path:
     carve_ckpt, out_path = Path(carve_ckpt), Path(out_path)
     state = torch.load(carve_ckpt, map_location="cpu", weights_only=False)
@@ -63,26 +64,34 @@ def bake_texture_init(
         points = escher.solve_points()
         alpha = soft_alpha(escher, points, ctx)[0, ..., 0].cpu().numpy()
 
-    color = np.asarray(imageio.imread(color_image), dtype=np.float64)[..., :3] / 255.0
-    mask, ground_std = figure_mask_from_flat_ground(color)
-    print(f"color figure area {mask.mean():.3f}, ground spread {ground_std:.3f}")
+    if aligned_override is not None:
+        # Pre-registered imagery (e.g. the escherize correspondence warp):
+        # already in the carve frame, skip the rigid alignment entirely.
+        aligned_color, aligned_mask = aligned_override
+        aligned_color = np.asarray(aligned_color, dtype=np.float64)
+        aligned_mask = np.asarray(aligned_mask, dtype=np.float64)
+        print("bake: using pre-registered (warped) color + mask")
+    else:
+        color = np.asarray(imageio.imread(color_image), dtype=np.float64)[..., :3] / 255.0
+        mask, ground_std = figure_mask_from_flat_ground(color)
+        print(f"color figure area {mask.mean():.3f}, ground spread {ground_std:.3f}")
 
-    # The same alignment the carve target got (including the carve's corner /
-    # translation knobs), with the color image riding the winning transform.
-    aligned_mask, params, iou = align_mask_to(
-        alpha,
-        mask,
-        match_area=bool(args.get("MATCH_TILE_AREA", True)),
-        corner_px=None,
-        corner_weight=0.0,
-        translation_px=float(args.get("ALIGN_TRANSLATION_SEARCH_PX", 0.0)),
-        companion=color,
-    )
-    aligned_color = params["companion"]
-    print(
-        f"color aligned: scale {params['scale']:.3f}, angle "
-        f"{params['angle_deg']:+.1f} deg, IoU vs carved tile {iou:.3f}"
-    )
+        # The same alignment the carve target got (including the carve's corner /
+        # translation knobs), with the color image riding the winning transform.
+        aligned_mask, params, iou = align_mask_to(
+            alpha,
+            mask,
+            match_area=bool(args.get("MATCH_TILE_AREA", True)),
+            corner_px=None,
+            corner_weight=0.0,
+            translation_px=float(args.get("ALIGN_TRANSLATION_SEARCH_PX", 0.0)),
+            companion=color,
+        )
+        aligned_color = params["companion"]
+        print(
+            f"color aligned: scale {params['scale']:.3f}, angle "
+            f"{params['angle_deg']:+.1f} deg, IoU vs carved tile {iou:.3f}"
+        )
 
     # Texel -> carved 3D surface point -> shape-camera pixel -> color sample.
     res = int(args.TEXTURE_RESOLUTION)
@@ -133,7 +142,12 @@ def bake_texture_init(
     axes[0].imshow(texture)
     axes[0].set_title("baked texture init", fontsize=10)
     axes[1].imshow(aligned_color)
-    axes[1].set_title(f"aligned color (IoU {iou:.3f})", fontsize=10)
+    title = (
+        "warped color (pre-registered)"
+        if aligned_override is not None
+        else f"aligned color (IoU {iou:.3f})"
+    )
+    axes[1].set_title(title, fontsize=10)
     overlay = np.stack([aligned_mask, alpha, np.zeros_like(alpha)], axis=-1)
     axes[2].imshow(overlay)
     axes[2].set_title("mask (R) vs carved tile (G)", fontsize=10)

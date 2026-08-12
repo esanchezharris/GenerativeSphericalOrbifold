@@ -230,6 +230,7 @@ def escherize(args) -> dict:
         if 0 in diffs or sum(diffs) != n:
             return None
         w_out = np.zeros((L, 3))
+        src = np.zeros(L, dtype=int)
         k = len(cone_loop_idx)
         for a in range(k):
             i0, i1 = cone_loop_idx[a], cone_loop_idx[(a + 1) % k]
@@ -237,22 +238,27 @@ def escherize(args) -> dict:
             t0, t1 = anchors[a], anchors[(a + 1) % k]
             span = (t1 - t0) % n or n
             for s in range(seg_len):
-                w_out[(i0 + s) % L] = w_pts[(t0 + round(s / seg_len * span)) % n]
-        return w_out
+                j = (t0 + round(s / seg_len * span)) % n
+                w_out[(i0 + s) % L] = w_pts[j]
+                src[(i0 + s) % L] = j
+        return w_out, src
 
     best = None
     for orient in (1, -1):
-        w_o = piecewise_w(w_sphere[::orient])
-        if w_o is None:
+        pw = piecewise_w(w_sphere[::orient])
+        if pw is None:
             continue
+        w_o, src_o = pw
         u, obj = solve_for(w_o.reshape(-1))
         if best is None or obj < best[0]:
-            best = (obj, orient, w_o)
+            best = (obj, orient, w_o, src_o)
     if best is None:
         raise ValueError("no orientation gives cyclically consistent cone anchors")
-    obj, orient, w_best = best
+    obj, orient, w_best, src_best = best
     off = -1  # correspondence is anchor-derived, not a global offset
     u_best, _ = solve_for(w_best.reshape(-1))
+    # Pixel-space correspondence: target-frame contour pixel per loop node.
+    w_px_best = contour_px[::orient][src_best]
 
     u_pts = u_best.reshape(L, 3)
     u_pts /= np.linalg.norm(u_pts, axis=1, keepdims=True).clip(1e-9)
@@ -273,6 +279,11 @@ def escherize(args) -> dict:
 
     ceiling = hard_iou(esch_mask, (mask > 0.5).astype(np.float32))
     np.save(out_dir / "escherized_target.npy", esch_mask)
+    # The boundary <-> contour correspondence IS the non-rigid registration the
+    # flat bake needs to dress an articulated outline (phase 2: warped bake).
+    np.savez(
+        out_dir / "correspondence.npz", u_px=px, w_px=w_px_best, loop=loop
+    )
 
     fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.6))
     axes[0].imshow(mask, cmap="gray")
