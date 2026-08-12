@@ -1,0 +1,40 @@
+# FLAT-ICONIC OUTLINE-FIRST (round 7) -- overlay listed AFTER
+# sphere_texture.yaml + sphere_texture_octa.yaml, replacing the gemfull/final
+# overlay for these runs.
+#
+# The target aesthetic is the user's reference sphere: one flat color per
+# figure + a few white icing marks, legibility carried ENTIRELY by the
+# interlocking outline. The texture is frozen at the image-anchored bake
+# (which already has exactly that look) and the whole 7000-step SDS budget
+# goes to the outline. Precedent: DreamFusion's textureless-shading pass
+# exists to prevent "scene content drawn onto flat geometry" (our
+# figure-painted-on-tile disease, named in 2022); Fantasia3D runs its entire
+# geometry stage appearance-free. probe_outline_grads.py measured healthy
+# dL/dW with a flat texture at this framing.
+#
+# Freezing the texture also dissolves the GEM paper's core tradeoff (guidance
+# 100 sharpens shape but wrecks color -- they went greyscale): color is
+# supplied by the anchor bake and the deliverable tint's 3-coloring, so the
+# outline signal can run at full guidance. White marks survive tinting (the
+# hue rotation's achromatic fixed point).
+
+# Outline: the round-5/6 winning joint stack, unchanged.
+FREEZE_SHAPE_AFTER: 7000
+LR_W: 0.1
+LR_STEP_SCHEDULE: true
+COTANGENT_RELATIVE_WEIGHTS: true
+EQUAL_AREA_WEIGHT: 0.0
+AREA_TAIL_WEIGHT: 0.0
+BOUNDARY_SMOOTH_WEIGHT_W: 0.0
+W_REGULARIZATION: 0.02
+ISOLATED_ROLL_DEG: 45.0
+TEXTURE_DROP_PROB: 50
+RESET_SHAPE_OPTIMIZER_ON_RESUME: true
+W_REVERT_ON_FOLD: true
+KITE_N: 40
+
+# Texture: FROZEN at the baked flat anchor.
+LR_TEXTURE: 0.0
+TEXTURE_TV_WEIGHT: 0.0
+TEXTURE_FILL_WEIGHT: 0.0
+TEXTURE_EMA_DECAY: 0.0

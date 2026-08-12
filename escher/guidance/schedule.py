@@ -27,7 +27,17 @@ def annealed_max_step(args, iteration: int) -> float:
 def arm_sds(guidance, args, iteration: int) -> None:
     """Call once per optimization step, before ``train_step``."""
     guidance.update_step(0, iteration)
-    if args.get("SDS_ANNEAL_END", 0) > 0 and hasattr(guidance, "set_step_range"):
+    if not hasattr(guidance, "set_step_range"):
+        return
+    # SDS_MIN_STEP raises the timestep FLOOR: diffusion deposits high-frequency
+    # detail at low t (spectral autoregression), so never sampling below the
+    # floor keeps SDS in the layout band -- the round-7 mark-refinement guard.
+    # 0/unset = the model default = every prior run.
+    floor = float(args.get("SDS_MIN_STEP", 0.0) or 0.0)
+    min_step = floor if floor > 0 else guidance.cfg.min_step_percent
+    if args.get("SDS_ANNEAL_END", 0) > 0:
         guidance.set_step_range(
-            guidance.cfg.min_step_percent, annealed_max_step(args, iteration)
+            min_step, max(annealed_max_step(args, iteration), min_step)
         )
+    elif floor > 0:
+        guidance.set_step_range(min_step, guidance.cfg.max_step_percent)

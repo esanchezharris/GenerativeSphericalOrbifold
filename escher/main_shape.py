@@ -453,6 +453,25 @@ def run_shape(args) -> dict:
 
     target = prepare_target(escher, ctx, args)
 
+    # Limb-thinness weighting (round 7): pay w_max-fold more for thin structures
+    # on either side of the aligned target -- the Escherization literature's
+    # answer to area losses starving fins/limbs. 0 (or <=1) = off = every prior
+    # carve bitwise.
+    limb_max = float(args.get("LIMB_WEIGHT_MAX", 0.0) or 0.0)
+    if limb_max > 1.0:
+        from escher.shape_target import limb_thinness_weights
+
+        lw = torch.as_tensor(
+            limb_thinness_weights(target.detach().cpu().numpy(), limb_max),
+            dtype=torch.float32,
+            device=escher.device,
+        )
+        ctx.loss_weights = lw if ctx.loss_weights is None else ctx.loss_weights * lw
+        print(
+            f"limb weighting armed: max {limb_max:.1f}, "
+            f"weighted fraction {(lw > 1.001).float().mean():.1%}"
+        )
+
     # Optional tau anneal over the final stretch: hard IoU is tau-invariant (the
     # alpha>0.5 contour is the polygon for ANY tau), but the LOSS's gradient band
     # narrows and sharpens as tau falls -- right when the residual is a thin

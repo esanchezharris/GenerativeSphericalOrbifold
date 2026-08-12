@@ -350,6 +350,46 @@ def align_mask_to(
     return aligned.astype(np.float32), params, iou
 
 
+def limb_thinness_weights(
+    mask: np.ndarray, w_max: float, ref_percentile: float = 90.0
+) -> np.ndarray:
+    """Per-pixel loss weights that pay MORE for thin structures, both sides.
+
+    Area losses structurally starve limbs -- a fin is ~1% of figure area, so its
+    loss contribution never competes with the torso's (the Escherization
+    literature's core diagnosis, Kaplan 2000 through Nagata-Imahori 2020: score
+    local structure, or weight it, instead of raw area). This is the weighting
+    fix: local thickness is estimated from the euclidean distance transform via
+    its ridge (a cheap medial axis), every pixel inherits the thickness of its
+    nearest ridge point, and weight = clamp(torso_thickness / thickness, 1,
+    w_max). Applied to the FIGURE (limbs, fins) and, with the same reference
+    scale, to the BACKGROUND (the notches between limbs that must be carved
+    out); the far field's huge thickness decays to weight 1 on its own.
+    ``mask_pyramid_loss`` re-normalizes to mean 1, so MASK_LOSS_WEIGHT keeps
+    its calibrated magnitude.
+    """
+    inside = np.asarray(mask, dtype=np.float64) > 0.5
+    weights = np.ones(inside.shape, dtype=np.float64)
+    t_ref = None
+    for region in (inside, ~inside):
+        r = ndimage.distance_transform_edt(region)
+        ridge = region & (r >= ndimage.grey_dilation(r, size=3) - 1e-9) & (r > 0.5)
+        if not ridge.any():
+            continue
+        _, idx = ndimage.distance_transform_edt(~ridge, return_indices=True)
+        thickness = r[idx[0], idx[1]]
+        if t_ref is None:
+            # The figure pass sets the torso scale for BOTH sides. AREA-weighted
+            # percentile of the propagated thickness map -- a ridge-pixel
+            # percentile is count-dominated by long thin centerlines (a fin
+            # contributes one ridge pixel per unit LENGTH, the torso roughly
+            # one) and collapses t_ref to the very thinness being weighted.
+            t_ref = float(np.percentile(thickness[region], ref_percentile))
+        w = np.clip(t_ref / np.maximum(thickness, 1.0), 1.0, float(w_max))
+        weights[region] = np.maximum(weights[region], w[region])
+    return weights
+
+
 def soft_iou(alpha: Tensor, target: Tensor) -> Tensor:
     """Soft intersection-over-union of rendered alpha vs the target mask, in [0, 1].
 

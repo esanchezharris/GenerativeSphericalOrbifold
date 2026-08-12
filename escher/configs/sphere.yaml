@@ -166,6 +166,10 @@ TEXTURE_TV_WEIGHT: 0.0
 SDS_ANNEAL_END: 0
 SDS_MAX_START: 0.98
 SDS_MAX_END: 0.5
+# Raise the sampled-timestep FLOOR (0 = model default 0.02). High floors keep SDS
+# in the layout band -- low-t samples are where high-frequency detail is deposited
+# (spectral autoregression). Round-7 mark-refinement guard; clamps the anneal max.
+SDS_MIN_STEP: 0.0
 
 ### presentation
 # Ambient floor for the diffuse shading applied to render_final's video and stills

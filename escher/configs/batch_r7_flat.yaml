@@ -1,0 +1,83 @@
+# Round 7 -- FLAT-ICONIC OUTLINE-FIRST: the user's reference sphere is the
+# spec (flat single-color figures + white icing marks, zero painted detail,
+# outline carries everything). Texture frozen at the flat anchor bake; the
+# entire SDS budget sculpts the outline. See sphere_texture_octa_flat.yaml.
+#
+#   python -m escher.pipeline escher/configs/batch_r7_flat.yaml
+#
+# Prereq: flat anchors regenerated with the icon phrasing (see plan; the
+# "minimal flat 2d vector icon, lineal color" suffix is the stock-icon trade
+# vocabulary and passes the flat-ground gate more readily).
+
+batch_name: r7_flat
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/gem_full/prep/carve_hi/checkpoint.pt
+  color_target: runs/r7_anchors/fish/color.png
+  prompt: "A professional cartoon of a fish, a masterpiece"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_flat.yaml]
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: true
+
+jobs:
+  - figure: flat_fish_g30       # does frozen-texture outline-first give the fake's look?
+
+  - figure: flat_fish_g100      # the unlocked GEM-strength outline signal
+    stages:
+      texture:
+        GUIDANCE_SCALE: 100.0
+
+  - figure: flat_fish_icon100   # score-distribution alignment: prompt says what the render IS
+    prompt: "a fish, minimal flat 2d vector icon, lineal color"
+    stages:
+      texture:
+        GUIDANCE_SCALE: 100.0
+
+  - figure: flat_ginger         # judged directly against the user's fake
+    reuse_carve: runs/r6_ginger/ginger_chunky/carve_s0/checkpoint.pt
+    color_target: runs/r7_anchors/ginger/color.png
+    prompt: "A professional cartoon of a cute gingerbread man, a masterpiece"
+    stages:
+      texture:
+        GUIDANCE_SCALE: 100.0
+
+  - figure: flat_gecko          # the failed-legibility case
+    reuse_carve: runs/r6_gecko/gecko/carve_s0/checkpoint.pt
+    color_target: runs/r7_anchors/gecko/color.png
+    prompt: "A professional cartoon of a gecko lizard, a masterpiece"
+    stages:
+      texture:
+        GUIDANCE_SCALE: 100.0
+
+  - figure: flat_fish_marks     # mark refinement without repainting: tiny texture
+    stages:                     # LR + timestep floor above the detail band
+      texture:
+        GUIDANCE_SCALE: 100.0
+        LR_TEXTURE: 0.002
+        SDS_MIN_STEP: 0.5
+
+  - figure: fish_limbcarve      # does limb weighting break the articulation ceiling?
+    reuse_carve: null
+    reuse_targets: assets/targets/fish64   # candidate sheet; screen re-ranks
+    seeds: [0]                             # under the limb objective (it may
+    stages:                                # legitimately pick a new winner)
+      screen:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml]
+        LIMB_WEIGHT_MAX: 5.0
+        TARGET_SWEEP_STEPS: 150
+        KEEP_CHECKPOINTS: 1
+      carve:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml, configs/sphere_shape_weights_fish2_hi.yaml]
+        LIMB_WEIGHT_MAX: 5.0
+        SHAPE_STEPS: 1500
+        KEEP_CHECKPOINTS: 2
+      texture:
+        GUIDANCE_SCALE: 100.0

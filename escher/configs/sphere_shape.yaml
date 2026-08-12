@@ -61,6 +61,12 @@ SOLID_ANGLE_AREA_MATCH: false
 # Weight the finest mask-loss level by per-pixel solid angle too, so the optimizer
 # values coverage per steradian. Experimental; A/B separately from the alignment.
 SOLID_ANGLE_LOSS_WEIGHTING: false
+# Limb-thinness weighting (round 7): pay up to this factor MORE for thin
+# structures on either side of the target (fins/limbs AND the notches between
+# them). Area losses structurally starve limbs -- a fin is ~1% of figure area
+# (the Escherization literature's core diagnosis; per-arc weights are its fix).
+# 0 = off = every prior carve bitwise. Composes with the solid-angle weights.
+LIMB_WEIGHT_MAX: 0.0
 
 # Pinned-corner-aware alignment (kite domains). The four cone corners can never
 # move; measured on the shipped fish, ALL FOUR sat outside the figure -- each a
