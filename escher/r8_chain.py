@@ -40,13 +40,24 @@ from escher.warped_bake import warped_anchor
 
 DEFAULTS = OmegaConf.create(
     {
+        # THE FRONT DOOR: one argument. FIGURE is a short subject description
+        # ("a sea turtle with four flippers"); prompts are derived from the
+        # proven templates. NAME defaults to a slug of FIGURE. The explicit
+        # *_PROMPT knobs still override for special cases.
+        "FIGURE": "",
         "NAME": "",
         "SILHOUETTE_PROMPT": "",
         "ANCHOR_PROMPT": "",
-        "OUT_ROOT": "runs/r8_chain",
-        "N_CANDIDATES": 16,
+        "OUT_ROOT": "runs/chain",
+        "N_CANDIDATES": 32,
         "LIMB_WEIGHT_MAX": 5.0,
-        "SHAPE_STEPS": 1500,
+        # Quality budget (raised after the first menagerie read as jagged):
+        # more boundary vertices, longer realization carve, outline curvature
+        # prior + contour pre-smoothing in the escherize fit.
+        "KITE_N": 56,
+        "SHAPE_STEPS": 2500,
+        "SMOOTH_WEIGHT": 0.35,
+        "CONTOUR_SMOOTH": 2.0,
     }
 )
 
@@ -56,7 +67,7 @@ CARVE_CONF = [
 ]
 
 
-def carve_args(out_dir: Path, **over):
+def carve_args(out_dir: Path, kite_n: int, **over):
     root = Path(__file__).parent / "configs"
     args = OmegaConf.merge(
         OmegaConf.load(root / "sphere.yaml"),
@@ -64,6 +75,7 @@ def carve_args(out_dir: Path, **over):
         *(OmegaConf.load(Path(__file__).parent / c) for c in CARVE_CONF),
     )
     args.OUTPUT_DIR = str(out_dir)
+    args.KITE_N = int(kite_n)
     for k, v in over.items():
         setattr(args, k, v)
     return args
@@ -109,7 +121,7 @@ def chain(a) -> dict:
         ref_dir = root / "ref"
         ref_ckpt = ref_dir / "checkpoint.pt"
         if not ref_ckpt.exists():
-            ref = build_shape_run(carve_args(ref_dir, DEVICE="cpu"))
+            ref = build_shape_run(carve_args(ref_dir, a.KITE_N, DEVICE="cpu"))
             ref.save_checkpoint(0)
 
         rows = []
@@ -118,7 +130,7 @@ def chain(a) -> dict:
             cdir.mkdir(parents=True, exist_ok=True)
             try:
                 al_args = carve_args(
-                    cdir, DEVICE="cpu", TARGET_MASK=str(cand), TARGET_SMOOTH_RADIUS=0
+                    cdir, a.KITE_N, DEVICE="cpu", TARGET_MASK=str(cand), TARGET_SMOOTH_RADIUS=0
                 )
                 esc = build_shape_run(al_args)
                 ctx = make_context(esc, al_args)
@@ -132,6 +144,8 @@ def chain(a) -> dict:
                             "CHORDS": [2, 3, 5, 8],
                             "LIMB_WEIGHT_MAX": float(a.LIMB_WEIGHT_MAX),
                             "POSITION_EPS": 0.05,
+                            "SMOOTH_WEIGHT": float(a.SMOOTH_WEIGHT),
+                            "CONTOUR_SMOOTH": float(a.CONTOUR_SMOOTH),
                         }
                     )
                 )
@@ -152,6 +166,7 @@ def chain(a) -> dict:
         result = run_shape(
             carve_args(
                 carve_dir,
+                a.KITE_N,
                 TARGET_MASK=str(wdir / "escherized_target.npy"),
                 ALIGN_IDENTITY=True,
                 TARGET_SMOOTH_RADIUS=0,
@@ -225,8 +240,22 @@ def chain(a) -> dict:
 
 def main() -> None:
     a = OmegaConf.merge(DEFAULTS, OmegaConf.from_cli())
+    if a.FIGURE:
+        if not a.NAME:
+            a.NAME = "".join(ch for ch in a.FIGURE.lower() if ch.isalnum() or ch == " ")
+            a.NAME = a.NAME.replace("a ", "", 1).strip().replace(" ", "_")[:40]
+        if not a.SILHOUETTE_PROMPT:
+            a.SILHOUETTE_PROMPT = (
+                f"a plain solid black silhouette of {a.FIGURE}, white background, "
+                "minimal flat logo, centered, full body"
+            )
+        if not a.ANCHOR_PROMPT:
+            a.ANCHOR_PROMPT = (
+                f"{a.FIGURE}, colorful minimal flat 2d vector icon, lineal color, "
+                "white background, centered, full body"
+            )
     if not (a.NAME and a.SILHOUETTE_PROMPT and a.ANCHOR_PROMPT):
-        raise SystemExit("usage: NAME=<figure> SILHOUETTE_PROMPT=... ANCHOR_PROMPT=...")
+        raise SystemExit('usage: FIGURE="a sea turtle with four flippers" [NAME=...]')
     chain(a)
 
 

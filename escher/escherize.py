@@ -56,6 +56,14 @@ DEFAULTS = OmegaConf.create(
         "CHORDS": [2, 3, 5, 8],  # multi-scale GAD chords, in loop steps
         "LIMB_WEIGHT_MAX": 5.0,
         "POSITION_EPS": 0.05,    # small absolute-position term for conditioning
+        # Curvature prior on the OUTLINE ITSELF (second differences of u): the
+        # fit metric matches differences to the target's differences, so a
+        # pixel-serrated contour transfers its serration -- this term charges
+        # for wiggle regardless of the target. Still one Cholesky solve.
+        "SMOOTH_WEIGHT": 0.35,
+        # Circular Gaussian smoothing of the target contour (in samples) before
+        # resampling: removes the rasterization staircase from the data.
+        "CONTOUR_SMOOTH": 2.0,
     }
 )
 
@@ -103,7 +111,7 @@ def boundary_affine_map(mesh, R1: np.ndarray, R2: np.ndarray):
 
 
 # ----------------------------------------------------------------------- target
-def target_contour(mask: np.ndarray, n: int) -> np.ndarray:
+def target_contour(mask: np.ndarray, n: int, smooth: float = 0.0) -> np.ndarray:
     """Longest closed 0.5-contour of ``mask``, resampled to ``n`` points by arc
     length. Returns ``(n, 2)`` as (col, row) pixel coordinates."""
     # Pad with a zero border first: production targets run to the frame edge,
@@ -129,6 +137,10 @@ def target_contour(mask: np.ndarray, n: int) -> np.ndarray:
     out = np.stack(
         [np.interp(ti, t, seg[:, 0]), np.interp(ti, t, seg[:, 1])], axis=1
     )
+    if smooth > 0:
+        from scipy.ndimage import gaussian_filter1d
+
+        out = gaussian_filter1d(out, sigma=float(smooth), axis=0, mode="wrap")
     return out
 
 
@@ -168,6 +180,16 @@ def expand3(S: np.ndarray) -> np.ndarray:
     return np.kron(S, np.eye(3))
 
 
+def curvature_penalty(n: int) -> np.ndarray:
+    """``Q = L2^T L2`` for the cyclic second-difference operator (n, n)."""
+    L2 = np.zeros((n, n))
+    for i in range(n):
+        L2[i, (i - 1) % n] = 1.0
+        L2[i, i] = -2.0
+        L2[i, (i + 1) % n] = 1.0
+    return L2.T @ L2
+
+
 # ------------------------------------------------------------------------- solve
 def escherize(args) -> dict:
     out_dir = Path(args.OUT_DIR)
@@ -190,7 +212,7 @@ def escherize(args) -> dict:
     mask = np.asarray(imageio.imread(args.TARGET), dtype=np.float64)
     mask = mask / max(mask.max(), 1e-9)
 
-    contour_px = target_contour(mask, L)
+    contour_px = target_contour(mask, L, smooth=float(args.get("CONTOUR_SMOOTH", 0.0)))
     w_sphere = unproject(contour_px, ctx.mv, ctx.proj, ctx.size)
 
     limb_map = limb_thinness_weights(mask, float(args.LIMB_WEIGHT_MAX))
@@ -201,17 +223,19 @@ def escherize(args) -> dict:
     S3 = expand3(
         metric_graph(L, node_w, list(args.CHORDS), float(args.POSITION_EPS))
     )
-    A = M.T @ S3 @ M
+    Q3 = expand3(curvature_penalty(L)) * float(args.get("SMOOTH_WEIGHT", 0.0))
+    A = M.T @ (S3 + Q3) @ M
     A += 1e-9 * np.trace(A) / A.shape[0] * np.eye(A.shape[0])
     chol = np.linalg.cholesky(A)
     MtS = M.T @ S3
+    MtQc = M.T @ (Q3 @ c)
 
     def solve_for(w_stack: np.ndarray) -> tuple[np.ndarray, float]:
-        rhs = MtS @ (w_stack - c)
+        rhs = MtS @ (w_stack - c) - MtQc
         xi = np.linalg.solve(chol.T, np.linalg.solve(chol, rhs))
         u = M @ xi + c
         r = u - w_stack
-        return u, float(r @ (S3 @ r))
+        return u, float(r @ (S3 @ r) + u @ (Q3 @ u))
 
     # CONE-ANCHORED PIECEWISE CORRESPONDENCE (the literature's decisive discrete
     # structure, Nagata-Imahori 2020): the four pinned cones cannot move, so one

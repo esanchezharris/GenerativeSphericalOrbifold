@@ -38,3 +38,17 @@ def test_metric_graph_is_positive_definite():
     w = np.linalg.eigvalsh(S)
     assert w.min() > 0
     assert np.allclose(S, S.T)
+
+
+def test_curvature_penalty_is_psd_and_kills_wiggle():
+    from escher.escherize import curvature_penalty
+
+    Q = curvature_penalty(32)
+    assert np.allclose(Q, Q.T)
+    w = np.linalg.eigvalsh(Q)
+    assert w.min() > -1e-10
+    # a straight (linear) cyclic ramp has curvature only at the wrap; a
+    # sawtooth has curvature everywhere -- the penalty must rank them.
+    smooth = np.sin(np.linspace(0, 2 * np.pi, 32, endpoint=False))
+    jagged = np.tile([1.0, -1.0], 16)
+    assert jagged @ Q @ jagged > 10 * (smooth @ Q @ smooth)
