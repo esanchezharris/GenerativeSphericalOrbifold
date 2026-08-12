@@ -95,16 +95,29 @@ def generate_color(args) -> dict:
         try:
             mask, ground_std = figure_mask_from_flat_ground(raw)
             area = float(mask.mean())
+            # Figure CHROMA gate: the deliverable's colors come from hue-tinting
+            # this figure, and achromatic pixels are fixed points of the tint --
+            # a white/gray figure renders as a monochrome sphere (measured:
+            # seahorse and ray anchors passed the flat-ground gate with pale
+            # figures and produced gray tilings).
+            fig_px = np.asarray(raw, dtype=np.float64)[..., :3][mask > 0.5] / 255.0
+            chroma = float(
+                (fig_px.max(axis=1) - fig_px.min(axis=1)).mean()
+            ) if len(fig_px) else 0.0
         except ValueError:
-            area, ground_std = 0.0, 1.0
-        candidates.append((i, area, ground_std))
+            area, ground_std, chroma = 0.0, 1.0, 0.0
+        candidates.append((i, area, ground_std, chroma))
         print(
             f"color candidate {i}: figure area {area:.3f}, ground spread "
-            f"{ground_std:.3f}",
+            f"{ground_std:.3f}, figure chroma {chroma:.3f}",
             flush=True,
         )
 
-    valid = [(i, a) for i, a, g in candidates if 0.08 <= a <= 0.6 and g <= 0.08]
+    valid = [
+        (i, a)
+        for i, a, g, ch in candidates
+        if 0.08 <= a <= 0.6 and g <= 0.08 and ch >= 0.12
+    ]
     if not valid:
         raise ValueError(
             "no color candidate with one clean figure on a FLAT ground -- adjust PROMPT"
