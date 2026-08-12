@@ -195,16 +195,28 @@ def prepare_target(escher: SphereEscher, ctx: ShapeContext, args) -> torch.Tenso
                 .numpy()
             )
 
-    aligned, params, iou = align_mask_to(
-        alpha0,
-        raw,
-        match_area=bool(args.get("MATCH_TILE_AREA", True)),
-        pixel_weights=weights,
-        corner_px=corner_px,
-        corner_weight=float(args.get("ALIGN_CORNER_WEIGHT", 0.0)),
-        translation_px=float(args.get("ALIGN_TRANSLATION_SEARCH_PX", 0.0)),
-        translation_steps=int(args.get("ALIGN_TRANSLATION_STEPS", 5)),
-    )
+    if bool(args.get("ALIGN_IDENTITY", False)):
+        # The mask is ALREADY in this carve frame (e.g. escherize.py output --
+        # rasterized through the same camera). Any re-alignment would move it.
+        aligned = raw.astype(np.float64)
+        if aligned.shape != alpha0.shape:
+            raise ValueError(
+                f"ALIGN_IDENTITY needs a frame-sized mask; got {aligned.shape} "
+                f"vs {alpha0.shape}"
+            )
+        params = {"scale": 1.0, "angle_deg": 0.0, "area_ratio": 1.0, "area_measure": "identity"}
+        iou = hard_iou(aligned, (alpha0 > 0.5).astype(np.float32))
+    else:
+        aligned, params, iou = align_mask_to(
+            alpha0,
+            raw,
+            match_area=bool(args.get("MATCH_TILE_AREA", True)),
+            pixel_weights=weights,
+            corner_px=corner_px,
+            corner_weight=float(args.get("ALIGN_CORNER_WEIGHT", 0.0)),
+            translation_px=float(args.get("ALIGN_TRANSLATION_SEARCH_PX", 0.0)),
+            translation_steps=int(args.get("ALIGN_TRANSLATION_STEPS", 5)),
+        )
     print(
         f"target aligned: scale {params['scale']:.3f}, angle {params['angle_deg']:+.1f} deg, "
         f"initial IoU {iou:.3f}, area ratio {params['area_ratio']:.4f} "
