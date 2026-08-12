@@ -47,6 +47,17 @@ def warped_anchor(
     pairs = np.load(correspondence)
     u_px, w_px = pairs["u_px"], pairs["w_px"]
 
+    # Densify: the solver's pairs live only at boundary VERTICES, and a sparse
+    # TPS waves between them. Linear interpolation along BOTH matched polylines
+    # triples the constraint density at zero registration cost.
+    def upsample(p: np.ndarray, k: int = 3) -> np.ndarray:
+        nxt = np.roll(p, -1, axis=0)
+        return np.concatenate(
+            [p + (nxt - p) * (j / k) for j in range(k)], axis=1
+        ).reshape(-1, p.shape[1])
+
+    u_px, w_px = upsample(u_px), upsample(w_px)
+
     target = np.asarray(imageio.imread(target_png), dtype=np.float64)
     target = target / max(target.max(), 1e-9)
 
