@@ -45,7 +45,10 @@ DEFAULTS = OmegaConf.create(
 
 
 def bake_texture_init(
-    carve_ckpt: str | Path, color_image: str | Path, out_path: str | Path
+    carve_ckpt: str | Path,
+    color_image: str | Path,
+    out_path: str | Path,
+    fill: str = "nearest",
 ) -> Path:
     carve_ckpt, out_path = Path(carve_ckpt), Path(out_path)
     state = torch.load(carve_ckpt, map_location="cpu", weights_only=False)
@@ -106,9 +109,18 @@ def bake_texture_init(
     )
     figure_texel[covered] = on_figure
 
-    # Texels off the figure (the carve residual) and unsampled gutter texels
-    # both take their nearest FIGURE color -- the whole tile starts fish-colored.
-    if figure_texel.any():
+    # Texels off the figure (the carve residual) and unsampled gutter texels.
+    # fill="nearest": nearest FIGURE color (historical; with a stroked anchor the
+    #   nearest figure pixel is always the outline, so the residual floods DARK --
+    #   the round-7 zero-SDS webbing).
+    # fill="flat": the median color of the figure's INTERIOR (mask eroded past the
+    #   stroke), so the residual reads as more figure body -- the flat-iconic rule.
+    if fill == "flat" and figure_texel.any():
+        core = ndimage.binary_erosion(figure_texel, iterations=max(2, res // 32))
+        source = core if core.any() else figure_texel
+        body = np.median(texture[source], axis=0)
+        texture[~figure_texel] = body
+    elif figure_texel.any():
         texture = gutter_fill(texture, figure_texel)
     valid = uv_valid_mask(escher.mesh.uv, escher.mesh.faces, res)
     texture = gutter_fill(texture, valid | figure_texel)
