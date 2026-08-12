@@ -1085,6 +1085,17 @@ class SphereEscher:
                         source = "texture_ema"
                 self.texture.copy_(state[source].to(self.device))
         self.optimizer.load_state_dict(state["optimizer"])
+        # load_state_dict restores the DONOR's param-group hyperparameters --
+        # including its learning rates -- so a cross-phase resume silently ran
+        # the joint phase at the CARVE's LRs (W 0.03, texture 0.01) no matter
+        # what this run configured. Found round 7: a "frozen" LR_TEXTURE=0
+        # texture trained at 0.01 anyway, and every round-5/6 LR_W=0.1 arm
+        # actually ran at 0.03 (StepLR is multiplicative on the current lr and
+        # never corrects it). Reassert THIS run's configured LRs.
+        a = self.args
+        shape_lr = a.LR_BOUNDARY if a.PARAM_MODE == "boundary" else a.LR_W
+        for group, lr in zip(self.optimizer.param_groups, (shape_lr, a.LR_TEXTURE)):
+            group["lr"] = float(lr)
         # The loaded parameters need a fresh solve; a cache from before the load
         # would render the OLD shape forever. Revert anchors must track the LOADED
         # state, not the init, or the first fold would backtrack toward the

@@ -133,3 +133,22 @@ def test_lr_step_schedule_decays_both_groups_at_80_percent(tmp_path):
 def test_lr_step_schedule_defaults_off(tmp_path):
     escher, _ = weights_escher(tmp_path)
     assert escher._lr_sched is None
+
+
+def test_load_checkpoint_reasserts_configured_lrs(tmp_path):
+    """The donor's optimizer state must not smuggle in its learning rates.
+
+    Found round 7: a cross-phase resume ran the joint phase at the CARVE's
+    LRs regardless of config -- a 'frozen' LR_TEXTURE=0 texture trained at
+    the donor's 0.01, and every LR_W=0.1 arm actually ran at the donor's.
+    """
+    donor, _ = weights_escher(tmp_path)
+    donor.optimizer.param_groups[0]["lr"] = 0.03   # the "carve's" lrs
+    donor.optimizer.param_groups[1]["lr"] = 0.01
+    path = donor.save_checkpoint(7)
+
+    loader, args = weights_escher(tmp_path, LR_W=0.1, LR_TEXTURE=0.0)
+    loader.args.OUTPUT_DIR = str(tmp_path / "loader2")
+    loader.load_checkpoint(path)
+    assert loader.optimizer.param_groups[0]["lr"] == pytest.approx(0.1)
+    assert loader.optimizer.param_groups[1]["lr"] == 0.0

@@ -64,20 +64,6 @@ jobs:
         LR_TEXTURE: 0.002
         SDS_MIN_STEP: 0.5
 
-  - figure: fish_limbcarve      # does limb weighting break the articulation ceiling?
-    reuse_carve: null
-    reuse_targets: assets/targets/fish64   # candidate sheet; screen re-ranks
-    seeds: [0]                             # under the limb objective (it may
-    stages:                                # legitimately pick a new winner)
-      screen:
-        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml]
-        LIMB_WEIGHT_MAX: 5.0
-        TARGET_SWEEP_STEPS: 150
-        KEEP_CHECKPOINTS: 1
-      carve:
-        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml, configs/sphere_shape_weights_fish2_hi.yaml]
-        LIMB_WEIGHT_MAX: 5.0
-        SHAPE_STEPS: 1500
-        KEEP_CHECKPOINTS: 2
-      texture:
-        GUIDANCE_SCALE: 100.0
+# (The limb-weighted arm runs via batch_r7_limb.yaml on the standalone carve --
+# assets/targets/fish64 carries only the committed winner mask, no candidate
+# sheet, so the in-batch screen path cannot run.)
