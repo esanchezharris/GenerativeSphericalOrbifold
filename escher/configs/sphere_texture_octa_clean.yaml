@@ -1,0 +1,54 @@
+# THE CLEAN STACK (round 12 winner) -- overlay, listed AFTER sphere_texture.yaml
+# + sphere_texture_octa.yaml + sphere_texture_octa_gemfull.yaml +
+# sphere_texture_octa_parity.yaml:
+#
+#   python escher/main_sphere.py "CONF_FILE=[configs/sphere_texture.yaml,configs/sphere_texture_octa.yaml,configs/sphere_texture_octa_gemfull.yaml,configs/sphere_texture_octa_parity.yaml,configs/sphere_texture_octa_clean.yaml]" \
+#       RESUME=runs/r10_parity/prep/carve_identity40/checkpoint.pt START_STEP=0 \
+#       "PROMPT=A professional cartoon of <SUBJECT>, a masterpiece, on a white background" ...
+#
+# The round-11 gingerbread showed murky dark streaks and pools between the
+# figures. A diagnostic found three co-located causes (leftover random-init
+# noise the mip chain averages in; a deliberately painted dark ring just
+# outside the UV tile that every edge tap drags inward; heavy minification at
+# the COMPRESSED cone corners sampling those high mips), plus one structural
+# gap: with isolated cropped views the inter-figure region was never in the
+# loss. A 7-arm ablation (batch_r12_ablation.yaml) measured every candidate
+# fix with escher/metrics_murk.py:
+#
+#   arm                       murk   gutter-noise  ring   perim
+#   ctrl (round 11)           0.242      0.51      0.393  1.473
+#   hygiene alone             0.367      0.36      0.482  1.457
+#   + white prompt only       0.371      0.28      0.479  1.427
+#   + TV 25 (dark but clean)  0.129      0.27      0.472  1.620
+#   + area regs 25/40         0.238      0.55      0.525  1.390
+#   + gutter refill every 50  0.377      0.36      0.493  1.537
+#   + quarter tiled views     0.137      0.29      0.475  1.618
+#   THIS STACK                0.070      0.14      0.669  1.890
+#
+# THE DECISIVE LEVER IS RANDOM_BACKGROUND: false, NOT the prompt clause.
+# The white-background phrasing alone barely moved (0.371). Random background
+# colors had been teaching SDS that arbitrary dark surroundings are acceptable;
+# once every view composited the figure on WHITE, it stopped painting dark
+# filler -- the gutter ring brightened 0.393 -> 0.669 and the murk band
+# collapsed to a third of the control. Articulation IMPROVED at the same time
+# (perimeter 1.890, the project's highest), so this costs nothing.
+#
+# Include the ", on a white background" clause in the prompt as well: the two
+# together are what was measured, and the clause aligns the score with what the
+# renderer now shows.
+
+# --- hygiene: the init must not survive as noise (both measured content-free:
+# in the painted core the random init is overwritten to R^2 ~0.002) ---
+TEXTURE_INIT_RANDOM: false      # flat 0.5 start instead of per-texel noise
+TEXTURE_GUTTER_FILL_EVERY: 250  # keep unrasterized texels at the nearest figure
+                                # color so mips stop averaging stale noise
+
+# --- the decisive lever ---
+RANDOM_BACKGROUND: false        # every SDS view composites on WHITE
+
+# Deliberately NOT included (measured, each a separate lever):
+#   TEXTURE_TV_WEIGHT 25 -- smooths the murk instead of preventing it (0.129)
+#   EQUAL_AREA/AREA_TAIL 25/40 -- tames geometry (spread 279 -> 34) but does
+#     nothing for murk (0.238); a quality lever, not a cleanliness one
+#   ISOLATED_TILE_FRACTION 0.75 -- helps (0.137) but costs articulation vs this
+#   TEXTURE_RESOLUTION 512 -- does NOT fit in 12 GiB beside the SDS batch
