@@ -1,0 +1,33 @@
+# Round 10 -- STRICT PAPER PARITY: the regime the GEM paper demonstrates,
+# executed on the spherical solver for the first time. One arm, one figure
+# (the round-10 done bar is ONE paper-grade figure); iteration levers are
+# pre-registered in the plan and get one run each, never stacked blind.
+#
+#   python -m escher.pipeline escher/configs/batch_r10_parity.yaml
+#
+# Prerequisite (CPU, seconds):
+#   runs/r10_parity/prep/carve_identity40/checkpoint.pt -- the undeformed
+#   KITE_N-40 kite (paper MESH_RESOLUTION 40-50 equivalent). SDS sculpts
+#   everything from it; no diffusion-sampled targets anywhere in the loop.
+
+batch_name: r10_parity
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a fish, a masterpiece"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml]
+      KITE_N: 40           # must match the identity checkpoint
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false          # the paper-faithful deliverable is greyscale; the
+                           # tinted 3-coloring variant is rendered in eval
+
+jobs:
+  - figure: parity_fish

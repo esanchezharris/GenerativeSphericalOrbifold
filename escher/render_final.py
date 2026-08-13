@@ -61,7 +61,7 @@ def export_mesh(escher: SphereEscher, out_dir: Path) -> bool:
     ok, message = check_covers_sphere_once(verts, faces)
     print(f"geometry: {message}")
 
-    texture = escher.texture.detach().clamp(0, 1).cpu().numpy()
+    texture = escher.effective_texture().detach().clamp(0, 1).cpu().numpy()
     imageio.imwrite(out_dir / "tiling.png", (texture * 255).astype(np.uint8))
 
     with open(out_dir / "tiling.mtl", "w") as f:
@@ -100,7 +100,7 @@ def render_turntable(
             mv = views[i : i + 4]
             images, alpha = render_tiled_sphere(
                 sphere,
-                escher.texture,
+                escher.effective_texture(),
                 mv=mv,
                 image_size=escher.args.RENDER_SIZE,
                 tile_color_matrices=tint,
@@ -114,7 +114,7 @@ def render_turntable(
     print(f"wrote {path} ({len(frames)} frames)")
 
     fig, axes = plt.subplots(1, 5, figsize=(19, 4.2))
-    axes[0].imshow(escher.texture.detach().clamp(0, 1).cpu().numpy())
+    axes[0].imshow(escher.effective_texture().detach().clamp(0, 1).cpu().numpy())
     axes[0].set_title("shared texture", fontsize=10)
     axes[0].set_xticks([])
     axes[0].set_yticks([])

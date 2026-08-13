@@ -273,6 +273,11 @@ class SphereEscher:
                     f"({res}, {res}, 3)"
                 )
             init = torch.as_tensor(arr, dtype=torch.float32)
+        elif bool(a.get("TEXTURE_INIT_RANDOM", False)):
+            # Upstream parity (main.py:410): color_parameters start uniform-random
+            # per texel -- SDS sculpts from noise rather than out of a flat field.
+            # Draws from the run's torch seed like every other random.
+            init = torch.rand(res, res, 3, dtype=torch.float32)
         elif init_color is None:
             init = torch.full((res, res, 3), 0.5, dtype=torch.float32)
         else:
@@ -650,7 +655,7 @@ class SphereEscher:
             )
         images, alpha = render_tiled_sphere(
             sphere,
-            self.texture if texture is None else texture,
+            self.effective_texture() if texture is None else texture,
             n_views=n_views,
             image_size=self.args.RENDER_SIZE,
             distance=self.args.CAMERA_DISTANCE,
@@ -663,6 +668,20 @@ class SphereEscher:
             shade_ambient=shade_ambient,
         )
         return images, alpha, points
+
+    def effective_texture(self) -> torch.Tensor:
+        """The texture as rendering consumes it.
+
+        BW (upstream base.yaml ``BW: True``, main.py:624-625) constrains the paint
+        to greyscale at the parameter level: channel 0 tiled to RGB, so SDS still
+        sees 3-channel images but can only deposit luminance -- the regime every
+        figure in the GEM paper was produced in (guidance 100 saturates color; the
+        paper "focuses mainly on greyscale textures"). Off (the default) returns
+        the parameter itself, bitwise-identical to every prior run.
+        """
+        if bool(self.args.get("BW", False)):
+            return self.texture[:, :, :1].repeat(1, 1, 3)
+        return self.texture
 
     @property
     def solid_texture(self) -> torch.Tensor:
@@ -786,7 +805,7 @@ class SphereEscher:
         tex_in = None
         drop_p = float(a.get("TEXTURE_DROP_PROB", 0.0) or 0.0)
         if isolated and not frozen and drop_p > 0:
-            tex_in = drop_textures(self.texture, a.IMAGE_BATCH_SIZE, drop_p)
+            tex_in = drop_textures(self.effective_texture(), a.IMAGE_BATCH_SIZE, drop_p)
 
         # GEM's random-rigid augmentation, isolated + unfrozen only: a roll about the
         # view axis so the outline is sculpted at many orientations, not one upright
@@ -1141,7 +1160,7 @@ class SphereEscher:
             close_up = (c_img * c_alpha + 1.0 * (1 - c_alpha)).clamp(0, 1).cpu().numpy()[0]
 
         fig, axes = plt.subplots(1, 5, figsize=(19, 4.2))
-        axes[0].imshow(self.texture.detach().clamp(0, 1).cpu().numpy())
+        axes[0].imshow(self.effective_texture().detach().clamp(0, 1).cpu().numpy())
         axes[0].set_title("shared texture", fontsize=10)
         axes[0].set_xticks([])
         axes[0].set_yticks([])

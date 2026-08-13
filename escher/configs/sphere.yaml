@@ -55,6 +55,16 @@ COTANGENT_RELATIVE_WEIGHTS: false
 TEXTURE_RESOLUTION: 256
 LR_TEXTURE: 0.01
 CLAMP_TEXTURE: true
+# Upstream GEM parity (base.yaml BW: True, main.py:624-625): constrain the paint to
+# greyscale -- channel 0 of the parameter tiled to RGB at render time, so SDS can only
+# deposit luminance. The paper's figures are greyscale BY DESIGN (guidance 100 trades
+# color for shape quality; its RGB ablation shows the degradation). false = full-color
+# parameter = every prior run, bitwise.
+BW: false
+# Upstream parity option (main.py:410): uniform-random per-texel init instead of a
+# flat color. Ignored when TEXTURE_INIT_PATH is set; takes precedence over
+# TEXTURE_INIT_COLOR. false = flat init = every prior run.
+TEXTURE_INIT_RANDOM: false
 # Upstream GEM parity: StepLR x0.1 at 80% of N_STEPS on BOTH parameter groups
 # (their SCHEDULER: step default). false = constant LRs = every prior run.
 LR_STEP_SCHEDULE: false
