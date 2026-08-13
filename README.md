@@ -73,10 +73,10 @@ optimization folding steps are projected back to the valid set.
 > ablation/diagnostic (see below), but it is not the papers' mechanism. The
 > project's method — Generative Escher Meshes' joint shape+texture score
 > distillation driven *through* the differentiable spherical orbifold Tutte
-> solve — is the pipeline that follows, currently being brought to strict
-> upstream parity (greyscale, guidance 100, 10:1 shape:texture LRs, full-run
-> joint: the regime the paper actually demonstrates, which had not previously
-> been executed on the sphere).
+> solve — is the pipeline that follows. Its first strict-parity run (greyscale,
+> guidance 100, 10:1 shape:texture LRs, full-run joint from the undeformed
+> kite: the regime the paper actually demonstrates, never previously executed
+> on the sphere) landed 2026-08-12 — see Results.
 
 ### The method: SDS shape+texture through the differentiable solve
 
@@ -169,6 +169,21 @@ target, 1500 steps, unless noted.
 | **+ corner/translation alignment + tau anneal** | **0.868** | **0.839** | 1.196× | 0 folds |
 | Gingerbread man (soft 0.737, historical) | — | — | 1.442× | 4π at 1.2e-13, 0 folds |
 | Plane, torus (soft 0.751, historical) | — | — | — | fold-free (planar Tutte) |
+
+**Round 10 — strict paper parity (2026-08-12, the corrected method).** The first
+run of the paper's demonstrated regime on the sphere — greyscale SDS at
+guidance 100, 10:1 LRs, full-run joint, constant t∼U(0.02, 0.98), starting from
+the **undeformed kite** with a random texture (no carve, no target silhouette,
+no image anchor: diffusion's only role is the score gradient) — produced
+`runs/r10_parity/parity_fish`: every tile a fish (body, eye, fanned tail fins),
+perimeter articulated to 1.407×, **zero folds and zero reverts across all 7000
+joint steps**, 4π certificate at 2.6e-8. Config:
+`sphere_texture_octa_parity.yaml` via `batch_r10_parity.yaml`. The solver
+underneath is validated against the reference implementation's converged
+output to 8.3e-9 per vertex (`tests/test_golden_solution.py`; the reference was
+rerun under Octave — `tests/golden/reference_rerun/`). Presentation: the hue
+tint is a no-op on greyscale (achromatic fixed point), so the color variant
+uses per-tile diagonal colorization along the same 3-coloring.
 
 Background on the rendered sphere (`metrics_background.py`, 30 tinted orbit
 views): the shipped fish read **1.91%** background-like; the polish scrub +
