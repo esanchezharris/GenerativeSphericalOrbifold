@@ -65,25 +65,20 @@ optimization folding steps are projected back to the valid set.
 
 ## Running it
 
-### The front door (deterministic, one command, ~35 min)
+> **Status (round 10, 2026-08-12):** the one-command `r8_chain` was briefly
+> promoted as "the front door". It is in fact a **deterministic baseline**: no
+> score distillation runs anywhere in it — diffusion only *samples two ordinary
+> images* (a silhouette and a flat icon), the tile is carved to the silhouette,
+> and the icon is warped and baked on. It stays in the repo as an
+> ablation/diagnostic (see below), but it is not the papers' mechanism. The
+> project's method — Generative Escher Meshes' joint shape+texture score
+> distillation driven *through* the differentiable spherical orbifold Tutte
+> solve — is the pipeline that follows, currently being brought to strict
+> upstream parity (greyscale, guidance 100, 10:1 shape:texture LRs, full-run
+> joint: the regime the paper actually demonstrates, which had not previously
+> been executed on the sphere).
 
-```bash
-python escher/r8_chain.py "FIGURE=a sea turtle with four flippers seen from above"
-```
-
-One argument in, a tiled sphere out: silhouette candidates → per-candidate
-alignment → **escherize-screen** (a closed-form reachability solve per
-candidate, seconds each — the ceiling it computes is the quantity the old
-40-minute carve screen estimated) → realization carve of the winner (the
-target is reachable by construction; expect hard IoU ≥ 0.95) → flat
-"lineal color" anchor → correspondence-warped flat bake → tinted render +
-turntable, under `runs/chain/<figure>/final/`. No diffusion after the two
-figure images; no seeds to retry; stages resume if interrupted. The one
-occasionally flaky stage is the color anchor for scenery-loving or
-canonically-gray subjects — rerun `make_target.py COLOR=true` with a more
-colorful phrasing into the chain's `anchor/` dir and invoke the chain again.
-
-### The classic SDS texture pipeline (the round-1–6 stack)
+### The method: SDS shape+texture through the differentiable solve
 
 This reproduces the fish sphere above end to end (~70 min, most of it step 4):
 
@@ -123,6 +118,22 @@ python escher/metrics_background.py output/fish_tex/checkpoint_polished.pt
 python escher/main_shape_planar.py                          # carve on the torus
 python escher/main.py CONF_FILE=configs/planar_texture.yaml # GEM-style joint SDS
 ```
+
+### The deterministic baseline (no SDS — ablation/diagnostic, ~35 min)
+
+```bash
+python escher/r8_chain.py "FIGURE=a sea turtle with four flippers seen from above"
+```
+
+One argument in, a tiled sphere out, with **zero score distillation**:
+silhouette candidates → per-candidate alignment → escherize-screen (a
+closed-form reachability solve per candidate, seconds each) → realization
+carve of the winner → flat "lineal color" anchor → correspondence-warped
+flat bake → tinted render + turntable, under `runs/chain/<figure>/final/`.
+Useful as a lower bound on what pure geometry + image registration buys, as
+a fast generator of alignment/reachability assets, and as the ablation the
+SDS method is judged against — but its figures are pasted, not generated,
+and it is not the project's result.
 
 ### Batch mode
 
