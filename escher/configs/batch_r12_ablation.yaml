@@ -29,6 +29,14 @@
 # flat init + training-time gutter refill. Each arm adds ONE lever. Judged
 # against the existing runs/r11_xmas/ctrl_ginger (same subject, same seed) --
 # no control rerun needed.
+#
+# MEASURED CONSTRAINT (smoke, 2026-08-13): TEXTURE_RESOLUTION 512 does NOT fit
+# on this 12 GiB card alongside the SDS batch -- the run reached ~11.8/12.3 GiB
+# and then made zero progress for 12 minutes at 100% GPU (WDDM spilling to
+# shared memory). Every arm therefore stays at 256; the resolution lever needs
+# IMAGE_BATCH_SIZE 2 or gradient checkpointing first, which would confound this
+# comparison. Its slot went to abl_ringfix, which targets the diagnostic's
+# actual mip mechanism more directly anyway.
 
 batch_name: r12_ablation
 runs_root: runs
@@ -73,17 +81,22 @@ jobs:
         TEXTURE_TV_WEIGHT: 25.0
 
   # --- ground look C: geometric (tame the 6678x boundary stretch) ---
+  # Smoked at 300 steps: perim 1.257 at step 200 (vs 1.253 unregularized --
+  # articulation intact) with area spread 11 instead of 38. Zero folds.
   - figure: abl_geom
     stages:
       texture:
         EQUAL_AREA_WEIGHT: 25.0
         AREA_TAIL_WEIGHT: 40.0
-        TEXTURE_RESOLUTION: 512
 
-  - figure: abl_res512             # isolates resolution from the reg dose
+  # --- attack the mip mechanism head-on: never let the ring go stale ---
+  # The dark ring + noisy gutter are what high mips average in at corners.
+  # Refilling every 50 steps keeps the gutter equal to the nearest FIGURE
+  # color throughout training, not just at export.
+  - figure: abl_ringfix
     stages:
       texture:
-        TEXTURE_RESOLUTION: 512
+        TEXTURE_GUTTER_FILL_EVERY: 50
 
   # --- close the blind spot: put the inter-figure region IN the loss ---
   - figure: abl_tiled
