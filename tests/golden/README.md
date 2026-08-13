@@ -18,6 +18,7 @@ Load them with `tests.golden.load_golden()`.
 | `L.mat` | 2554 × 2554 sparse | Raw cotangent Laplacian, same sparsity pattern, 1696 negative off-diagonals. |
 | `V.mat` | 2502 × 3 | Source mesh vertices, **uncut**. |
 | `F.mat` | 5000 × 3 | Faces, **1-based** (MATLAB convention). |
+| `x_final.mat` | 7662 × 1 + scalar `E_final` | **The reference's converged embedding** and its final energy, from the 2026-08-12 Octave rerun (`reference_rerun/`). The reference counts each edge in both directions, so `E_final = 7.873716855189 = 2 ×` the Python solver's 3.936858427594. Pinned by `tests/test_golden_solution.py` (per-vertex agreement 8.3e-9 at dump time). |
 
 Coordinates are `colStack`ed: `[x₁ y₁ z₁ x₂ y₂ z₂ …]`, so `x.reshape(-1, 3)` recovers
 per-vertex rows.
