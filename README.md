@@ -65,6 +65,26 @@ optimization folding steps are projected back to the valid set.
 
 ## Running it
 
+### The front door (deterministic, one command, ~35 min)
+
+```bash
+python escher/r8_chain.py "FIGURE=a sea turtle with four flippers seen from above"
+```
+
+One argument in, a tiled sphere out: silhouette candidates → per-candidate
+alignment → **escherize-screen** (a closed-form reachability solve per
+candidate, seconds each — the ceiling it computes is the quantity the old
+40-minute carve screen estimated) → realization carve of the winner (the
+target is reachable by construction; expect hard IoU ≥ 0.95) → flat
+"lineal color" anchor → correspondence-warped flat bake → tinted render +
+turntable, under `runs/chain/<figure>/final/`. No diffusion after the two
+figure images; no seeds to retry; stages resume if interrupted. The one
+occasionally flaky stage is the color anchor for scenery-loving or
+canonically-gray subjects — rerun `make_target.py COLOR=true` with a more
+colorful phrasing into the chain's `anchor/` dir and invoke the chain again.
+
+### The classic SDS texture pipeline (the round-1–6 stack)
+
 This reproduces the fish sphere above end to end (~70 min, most of it step 4):
 
 ```bash
