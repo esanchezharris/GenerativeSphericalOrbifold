@@ -117,6 +117,26 @@ def test_stationarity_column_in_metrics(tmp_path):
     assert lines[1].split(",")[-1] == "1.250e-08"
 
 
+def test_finalize_explicit_colorize_beats_config_tint(tmp_path, capsys):
+    """The bug this pins: texture checkpoints embed TILE_TINT true, which
+    silently preempted an explicit colorize request with a hue rotation --
+    a no-op on BW textures, so the 'colorized' render came out gray."""
+    from escher.render_final import finalize
+
+    escher, _ = bw_escher(tmp_path, TILE_TINT=True)
+    escher.output_dir.mkdir(parents=True, exist_ok=True)
+    escher.save_checkpoint(0)
+    finalize(
+        escher.output_dir / "checkpoint.pt",
+        colorize=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        turntable=False,
+        gutter=False,
+    )
+    out = capsys.readouterr().out
+    assert "colorizing" in out
+    assert "tinting" not in out
+
+
 def test_colorize_matrices_are_diagonal_palette_scalers(tmp_path):
     from escher.rendering.palette import assign_palette_indices, colorize_matrices
 

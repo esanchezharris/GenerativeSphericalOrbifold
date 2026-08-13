@@ -169,7 +169,16 @@ def finalize(
     # choice. The OBJ export stays untinted either way -- one shared texture is the
     # point of the mesh.
     tint_mtx = None
-    use_tint = escher.args.get("TILE_TINT", False) if tint is None else bool(tint)
+    # An EXPLICIT colorize request suppresses the config-derived tint: texture
+    # checkpoints embed TILE_TINT true (sphere_texture.yaml), which would
+    # otherwise preempt colorization with a hue rotation -- a no-op on BW
+    # textures. An explicit tint argument still wins over everything.
+    explicit_colorize = colorize is not None and colorize is not False
+    use_tint = (
+        bool(tint)
+        if tint is not None
+        else (bool(escher.args.get("TILE_TINT", False)) and not explicit_colorize)
+    )
     if use_tint:
         from escher.rendering.palette import tile_color_matrices
 
