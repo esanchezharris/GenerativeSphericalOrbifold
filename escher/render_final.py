@@ -131,6 +131,7 @@ def finalize(
     checkpoint: str | Path,
     *,
     tint: bool | None = None,
+    colorize=None,
     shade: bool = True,
     out_dir: str | Path | None = None,
     turntable: bool = True,
@@ -176,6 +177,28 @@ def finalize(
         tint_mtx = tile_color_matrices(escher.tiler, escher.mesh, hues)
         print(f"tinting {escher.tiler.order} tiles with hue palette {hues}")
 
+    # Colorization: per-tile diagonal RGB scaling of luminance along the same
+    # 3-coloring. The hue tint is a NO-OP on greyscale (BW) textures -- the
+    # achromatic fixed point -- so this is the color presentation for them.
+    # ``colorize`` may be None (read config COLORIZE), a bool, or a palette
+    # (sequence of RGB triples). Tint takes precedence if both are armed.
+    if tint_mtx is None:
+        from escher.rendering.palette import PASTEL_PALETTE, colorize_matrices
+
+        if colorize is None:
+            use_col = bool(escher.args.get("COLORIZE", False))
+            pal = escher.args.get("COLORIZE_PALETTE", None)
+        elif isinstance(colorize, bool):
+            use_col = colorize
+            pal = escher.args.get("COLORIZE_PALETTE", None)
+        else:
+            use_col = True
+            pal = colorize
+        if use_col:
+            pal = [list(c) for c in (pal if pal is not None else PASTEL_PALETTE)]
+            tint_mtx = colorize_matrices(escher.tiler, escher.mesh, pal)
+            print(f"colorizing {escher.tiler.order} tiles with palette {pal}")
+
     # Diffuse shading for the video and stills. Without it the turntable is genuinely
     # ambiguous -- a rotating textured sphere carries no shape-from-shading cue, so it
     # reads as easily as the concave inside of the ball as the convex outside.
@@ -201,11 +224,12 @@ def finalize(
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit(
-            f"usage: {sys.argv[0]} <checkpoint.pt> [TINT=1] [SHADE=0] [GUTTER=0]"
+            f"usage: {sys.argv[0]} <checkpoint.pt> [TINT=1] [COLORIZE=1] [SHADE=0] [GUTTER=0]"
         )
     result = finalize(
         Path(sys.argv[1]),
         tint=True if "TINT=1" in sys.argv[2:] else None,
+        colorize=True if "COLORIZE=1" in sys.argv[2:] else None,
         shade="SHADE=0" not in sys.argv[2:],
         gutter="GUTTER=0" not in sys.argv[2:],
         ema="EMA=1" in sys.argv[2:],

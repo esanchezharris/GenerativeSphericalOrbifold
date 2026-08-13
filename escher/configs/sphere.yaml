@@ -65,6 +65,13 @@ BW: false
 # flat color. Ignored when TEXTURE_INIT_PATH is set; takes precedence over
 # TEXTURE_INIT_COLOR. false = flat init = every prior run.
 TEXTURE_INIT_RANDOM: false
+# Upstream parity option (main.py:339): W starts from N(0, std^2) under the run
+# SEED instead of zeros -- the paper's actual init, a different basin. 0.0 = zeros.
+W_INIT_RANDN: 0.0
+# The IFT adjoint is exact only at a converged forward solve; the achieved
+# stationarity |Pg|_inf is logged every unfrozen step (metrics.csv). A value
+# here (> 0) additionally prints a warning when a step exceeds it. 0 = observe.
+STATIONARITY_WARN: 0.0
 # Upstream GEM parity: StepLR x0.1 at 80% of N_STEPS on BOTH parameter groups
 # (their SCHEDULER: step default). false = constant LRs = every prior run.
 LR_STEP_SCHEDULE: false
@@ -194,6 +201,13 @@ SHADE_AMBIENT: 0.55
 # conflicting hues into the one shared texture).
 TILE_TINT: false
 PALETTE_HUES_DEG: [0.0, 120.0, -120.0]
+# Colorization: per-tile DIAGONAL RGB scaling along the same 3-coloring. The hue
+# tint is a NO-OP on greyscale (BW) textures (achromatic fixed point); this is
+# the color presentation for them. null palette = the pastel default
+# (palette.PASTEL_PALETTE); palette.XMAS_PALETTE is the red/green/gold ornament
+# set. Tint takes precedence when both are armed. Render-time only, like TINT.
+COLORIZE: false
+COLORIZE_PALETTE: null
 
 ### output
 OUTPUT_DIR: "output/sphere"

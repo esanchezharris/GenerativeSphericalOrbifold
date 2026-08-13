@@ -256,7 +256,16 @@ class SphereEscher:
         else:
             n_edges = len(self.mesh.edges)
             # Start from zero: sigmoid(0) = 0.5 -> uniform weights -> the undeformed lune.
-            self.W = torch.nn.Parameter(torch.zeros(n_edges, dtype=torch.float64))
+            # W_INIT_RANDN (upstream parity, main.py:339: W = randn) draws the start
+            # from N(0, std^2) under the run SEED instead -- the paper's actual init
+            # and a different optimization basin. 0.0 = zeros = every prior run.
+            w_std = float(a.get("W_INIT_RANDN", 0.0) or 0.0)
+            w0 = (
+                torch.randn(n_edges, dtype=torch.float64) * w_std
+                if w_std > 0
+                else torch.zeros(n_edges, dtype=torch.float64)
+            )
+            self.W = torch.nn.Parameter(w0)
             # Revert anchor for W_REVERT_ON_FOLD; refreshed on checkpoint load.
             self._W_good: torch.Tensor | None = self.W.detach().clone()
             shape_group = {"params": [self.W], "lr": a.LR_W}
@@ -793,6 +802,22 @@ class SphereEscher:
             self._n_reverts += 1
             self.reset_shape_optimizer_state()
 
+        # The IFT adjoint is exact only at a converged forward solve
+        # (differentiable.py) -- record the achieved stationarity every unfrozen
+        # step so a degraded-gradient regime is visible in metrics.csv, and warn
+        # when it exceeds STATIONARITY_WARN (0 = observer only).
+        stationarity = float("nan")
+        if not frozen:
+            s = getattr(self.embedder, "last_stationarity", None)
+            if s is not None:
+                stationarity = float(s)
+            warn = float(a.get("STATIONARITY_WARN", 0.0) or 0.0)
+            if warn > 0 and stationarity > warn:
+                print(
+                    f"!! solve stationarity {stationarity:.2e} > {warn:.1e} at "
+                    f"step {iteration}: adjoint gradient may be degraded"
+                )
+
         # Alternate between the two framings. Isolated views give SDS a silhouette to shape
         # the tile outline with; tiled views make the texture read correctly in context.
         # The fraction sets the actual cadence (0.5 -> every 2nd step), not just on/off.
@@ -948,6 +973,7 @@ class SphereEscher:
             "timestep": float(timestep.float().mean()),
             "energy": energy,
             "solver_iters": solver_iters,
+            "stationarity": stationarity,
             "points": points,
         }
 
@@ -1014,13 +1040,15 @@ class SphereEscher:
             if new:
                 f.write(
                     "step,loss,silhouette,area_reg,karcher,"
-                    "boundary_ratio,area_spread,flips,reverts,solver_iters\n"
+                    "boundary_ratio,area_spread,flips,reverts,solver_iters,"
+                    "stationarity\n"
                 )
             f.write(
                 f"{iteration},{info['loss']:.4f},{info['silhouette']:.4f},"
                 f"{info['area_reg']:.4f},{info['energy']:.6f},"
                 f"{info['boundary_ratio']:.6f},{info['area_spread']:.2f},"
-                f"{info['flips']},{info['reverts']},{info['solver_iters']}\n"
+                f"{info['flips']},{info['reverts']},{info['solver_iters']},"
+                f"{info.get('stationarity', float('nan')):.3e}\n"
             )
 
     def check_geometry(self, points: torch.Tensor) -> tuple[bool, str]:
@@ -1253,6 +1281,7 @@ class SphereEscher:
                     f"spread {info['area_spread']:6.1f} | "
                     f"flp {info['flips']:2d}/{info['reverts']:3d} | "
                     f"solver {info['solver_iters']:3d} it | "
+                    f"st {info['stationarity']:8.1e} | "
                     f"{inst:5.2f}/{per_step:5.2f} s/step | {mem:4.1f} GiB",
                     flush=True,
                 )

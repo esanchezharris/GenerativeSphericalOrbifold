@@ -81,3 +81,53 @@ def test_init_path_takes_precedence_over_random(tmp_path):
         tmp_path, TEXTURE_INIT_PATH=str(p), TEXTURE_INIT_RANDOM=True
     )
     assert torch.allclose(escher.texture.detach().cpu(), torch.full((res, res, 3), 0.25))
+
+
+def test_w_init_randn(tmp_path):
+    escher, _ = bw_escher(tmp_path, W_INIT_RANDN=1.0)
+    w = escher.W.detach()
+    assert w.abs().sum() > 0, "randn init must not be zeros"
+    assert w.dtype == torch.float64
+    # deterministic under the run seed
+    escher2, _ = bw_escher(tmp_path, W_INIT_RANDN=1.0)
+    assert torch.equal(escher2.W.detach(), w)
+    # default stays zeros (every prior run)
+    escher0, _ = bw_escher(tmp_path)
+    assert torch.equal(escher0.W.detach(), torch.zeros_like(escher0.W.detach()))
+
+
+def test_stationarity_column_in_metrics(tmp_path):
+    escher, _ = bw_escher(tmp_path)
+    info = {
+        "loss": 1.0,
+        "silhouette": 0.0,
+        "area_reg": 0.0,
+        "energy": 1.0,
+        "boundary_ratio": 1.0,
+        "area_spread": 1.0,
+        "flips": 0,
+        "reverts": 0,
+        "solver_iters": 5,
+        "stationarity": 1.25e-8,
+    }
+    escher.output_dir.mkdir(parents=True, exist_ok=True)
+    escher.log_metrics(0, info, fresh=True)
+    lines = (escher.output_dir / "metrics.csv").read_text().splitlines()
+    assert lines[0].split(",")[-1] == "stationarity"
+    assert lines[1].split(",")[-1] == "1.250e-08"
+
+
+def test_colorize_matrices_are_diagonal_palette_scalers(tmp_path):
+    from escher.rendering.palette import assign_palette_indices, colorize_matrices
+
+    escher, _ = bw_escher(tmp_path)
+    palette = [[1.0, 0.5, 0.25], [0.2, 0.9, 0.4], [0.3, 0.3, 1.0]]
+    mats = colorize_matrices(escher.tiler, escher.mesh, palette)
+    idx = assign_palette_indices(escher.tiler, escher.mesh, len(palette))
+    assert mats.shape == (escher.tiler.order, 3, 3)
+    for g in range(escher.tiler.order):
+        expect = torch.diag(torch.tensor(palette[idx[g]], dtype=torch.float32))
+        assert torch.allclose(mats[g], expect)
+    # off-diagonals are zero: pure channel scaling, blacks stay black
+    off = mats - torch.diag_embed(torch.diagonal(mats, dim1=1, dim2=2))
+    assert off.abs().max() == 0

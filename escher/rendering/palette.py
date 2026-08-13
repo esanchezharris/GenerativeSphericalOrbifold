@@ -21,7 +21,15 @@ __all__ = [
     "tile_adjacency",
     "assign_palette_indices",
     "tile_color_matrices",
+    "colorize_matrices",
+    "PASTEL_PALETTE",
+    "XMAS_PALETTE",
 ]
+
+# Colorization palettes (RGB scalers). Pastel = the fake-sphere family;
+# XMAS = red / green / gold for the ornament theme.
+PASTEL_PALETTE = [[1.00, 0.62, 0.66], [1.00, 0.80, 0.52], [0.58, 0.76, 1.00]]
+XMAS_PALETTE = [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
 
 
 def hue_rotation_matrix(degrees: float) -> torch.Tensor:
@@ -104,3 +112,20 @@ def tile_color_matrices(tiler, mesh, hues_deg) -> torch.Tensor:
     """(G, 3, 3) per-tile color matrices from a palette of hue angles."""
     indices = assign_palette_indices(tiler, mesh, len(hues_deg))
     return torch.stack([hue_rotation_matrix(float(hues_deg[i])) for i in indices])
+
+
+def colorize_matrices(tiler, mesh, palette) -> torch.Tensor:
+    """(G, 3, 3) per-tile DIAGONAL color scalers from an RGB palette.
+
+    The hue rotation preserves luminance but has an achromatic fixed point:
+    greyscale (BW) textures pass through it unchanged. Colorization multiplies
+    luminance by a tile color instead -- the correct alternation for greyscale
+    figures. White areas take the tile color at full brightness; blacks stay
+    black, so line work survives.
+    """
+    indices = assign_palette_indices(tiler, mesh, len(palette))
+    mats = [
+        torch.diag(torch.as_tensor(np.asarray(palette[i], dtype=np.float32)))
+        for i in indices
+    ]
+    return torch.stack(mats)

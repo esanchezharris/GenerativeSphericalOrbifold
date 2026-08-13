@@ -152,6 +152,9 @@ def render_params(plan: JobPlan, tseed: int, dry_run: bool) -> dict:
         "dry_run": dry_run,
         "checkpoint": str(plan.tex_dir(tseed) / "checkpoint.pt"),
         "tint": over.get("TINT"),
+        # COLORIZE_PALETTE (a list of RGB triples) implies on; bare COLORIZE
+        # uses the default palette. See render_final.finalize.
+        "colorize": over.get("COLORIZE_PALETTE") or over.get("COLORIZE"),
     }
 
 
@@ -243,6 +246,7 @@ def _stage_render(params: dict) -> dict:
     result = finalize(
         params["checkpoint"],
         tint=params.get("tint"),
+        colorize=params.get("colorize"),
         turntable=not params.get("dry_run"),
     )
     if not result["geometry_ok"]:
