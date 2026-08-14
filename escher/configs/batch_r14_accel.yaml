@@ -1,0 +1,113 @@
+# Round 14 -- DOES THE ACCELERATION COST QUALITY? The A/B night.
+#
+#   python -m escher.pipeline escher/configs/batch_r14_accel.yaml
+#
+# Round 14 cut the step from 602 ms to a projected ~230 by (a) swapping the SD
+# VAE encoder for TAESD -- the encoder was 48% of wall clock and is the only
+# network in the backward -- and (b) six solver knobs that took the geometry
+# from 358 to 58 ms. The solver work is provably answer-preserving (verified
+# against the golden MATLAB solution; largest vertex move 1e-8 against a 1e-6
+# gate), so `solv_full` is a pure control: any visible difference there is
+# CUDA/SDS chaos, not the change.
+#
+# TAESD is the one that genuinely approximates: it reproduces the encoder's
+# VALUE well (latent std ratio 0.899, per-channel correlation 0.93-0.95) but
+# its Jacobian only agrees with the real encoder's at cosine 0.473. The
+# decisive context, measured by probe_sds_encoder.py: two SDS gradients drawn
+# from the SAME encoder agree at cosine -0.033. This optimizer's own step-to-
+# step noise is total, so 0.473 is far above anything it resolves -- but that
+# is an argument, not evidence. This batch is the evidence.
+#
+# JUDGE ON, per arm: metrics_murk (murk_fraction, noise residuals, ring
+# luminance), final boundary_ratio (articulation -- must not collapse toward
+# 1.0), the 4pi certificate and flips/reverts (hard stop), and blinded eyes on
+# the contact sheet.
+#
+# THE NOISE FLOOR IS ALREADY ON DISK: the seven runs/r12_ablation arms share
+# subject, seed and carve and differ by one lever each. Their spread is how
+# much "the same question asked twice" moves. If the taesd arms sit inside it,
+# "unchanged" is the honest verdict. Pre-registered expectation is NOT
+# "identical" but "not worse on murk, not collapsed on perim" -- TAESD is lossy
+# on high frequencies, which for this project's murk failure mode could cut
+# either way, and that is the interesting thing this night can tell us.
+#
+# DO NOT COMPARE THE `loss` COLUMN ACROSS ENCODER ARMS. SDS loss is
+# 0.5*||z - (z-grad)||^2/B; its scale rides on the latent scale, so it is
+# meaningless across encoders. Compare boundary_ratio, the murk metrics, renders.
+
+batch_name: r14_accel
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a gingerbread man, a masterpiece, on a white background"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml, configs/sphere_texture_octa_clean.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+
+jobs:
+  # --- the control: today's shipped stack, rerun under the current code -------
+  - figure: ctrl
+
+  # --- the encoder, isolated (res 256, no solver knobs) -----------------------
+  - figure: enc_taesd
+    stages:
+      texture:
+        SDS_ENCODER: taesd
+
+  - figure: enc_taesd_s1          # seed spread of the encoder change
+    stages:
+      texture:
+        SDS_ENCODER: taesd
+        SEED: 1
+
+  - figure: enc_vaemean           # separates "no posterior sampling" from "TAESD"
+    stages:
+      texture:
+        SDS_ENCODER: vae_mean
+
+  # --- the solver, isolated: answer-preserving, so this is a chaos control ----
+  - figure: solv_full
+    stages:
+      texture:
+        SOLVER_CACHE_AFFINE: true
+        SOLVER_PRECOND_EVERY: 5
+        SOLVER_TWO_LOOP_ORDER: textbook
+        SOLVER_MEMORY: 8
+        SOLVER_TOL_GRAD: 1.0e-8
+        ADJOINT_REUSE_FACTOR: true
+
+  # --- the deliverable: everything, at double texture resolution --------------
+  - figure: full_512
+    stages:
+      texture:
+        SDS_ENCODER: taesd
+        TEXTURE_RESOLUTION: 512
+        SOLVER_CACHE_AFFINE: true
+        SOLVER_PRECOND_EVERY: 5
+        SOLVER_TWO_LOOP_ORDER: textbook
+        SOLVER_MEMORY: 8
+        SOLVER_TOL_GRAD: 1.0e-8
+        ADJOINT_REUSE_FACTOR: true
+
+  - figure: full_512_s1
+    stages:
+      texture:
+        SDS_ENCODER: taesd
+        TEXTURE_RESOLUTION: 512
+        SOLVER_CACHE_AFFINE: true
+        SOLVER_PRECOND_EVERY: 5
+        SOLVER_TWO_LOOP_ORDER: textbook
+        SOLVER_MEMORY: 8
+        SOLVER_TOL_GRAD: 1.0e-8
+        ADJOINT_REUSE_FACTOR: true
+        SEED: 1
