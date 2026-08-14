@@ -72,6 +72,43 @@ W_INIT_RANDN: 0.0
 # stationarity |Pg|_inf is logged every unfrozen step (metrics.csv). A value
 # here (> 0) additionally prints a warning when a step exceeds it. 0 = observe.
 STATIONARITY_WARN: 0.0
+
+### solver acceleration (all default to the reference behavior)
+# With the encoder swap done, the CPU Tutte solve is the dominant per-step cost.
+# Each knob below was measured; every one is verified against tests/test_golden_
+# solution.py (the MATLAB-output pin) and the finite-difference gradient gate.
+#
+# Provably exact -- these change nothing but the work done:
+SOLVER_CACHE_AFFINE: false   # A and b are run constants in weights mode, yet
+                             # AffineSpace (dense eigvalsh + Cholesky) was rebuilt
+                             # every solve. Bit-identical. ~1.5 ms/step.
+ADJOINT_REUSE_FACTOR: false  # keep the previous adjoint LU and use it as a GMRES
+                             # preconditioner. Exact -- GMRES drives the TRUE
+                             # residual, which the code already gates on. The
+                             # factorization is 74% of the adjoint and 60x its own
+                             # solve. ~20-26 ms/step at KITE_N 40.
+# Same fixed point, different route (measured max vertex move 4e-9, vs a 1e-6
+# golden gate):
+SOLVER_PRECOND_EVERY: 1      # rebuild the Laplacian preconditioner every K solves.
+                             # It only steers; measured iteration penalty at K=5
+                             # (or even K=inf) is ZERO. ~14 ms/step.
+SOLVER_TWO_LOOP_ORDER: "reference"  # "textbook" fixes the L-BFGS two-loop
+                             # recursion, whose second loop runs newest->oldest
+                             # here (Nocedal & Wright 7.4 requires oldest->newest).
+                             # It is a FAITHFUL port of the same deviation in
+                             # OptimSolverLBFGS_NEW.m -- which is why memory is
+                             # pinned at 3: with the wrong order more pairs make
+                             # the direction WORSE. Fixed + memory 8: 33 -> 23
+                             # iterations/step.
+SOLVER_MEMORY: 3             # only worth raising with SOLVER_TWO_LOOP_ORDER textbook
+SOLVER_TOL_GRAD: 0.0         # stop on |Pg|_inf -- the quantity the IFT adjoint
+                             # actually needs, already logged per step. At 1e-8:
+                             # 33 -> 22 iters for achieved stationarity 7e-9 and a
+                             # 5e-8 relative gradient move (~7 orders under SDS
+                             # noise). Do not exceed 1e-7.
+SOLVER_LINE_SEARCH: "backtrack"  # "interp" adds a warm starting step and a
+                             # safeguarded quadratic on first rejection: -33%
+                             # f-evals in the WARM regime, but measured WORSE cold.
 # Upstream GEM parity: StepLR x0.1 at 80% of N_STEPS on BOTH parameter groups
 # (their SCHEDULER: step default). false = constant LRs = every prior run.
 LR_STEP_SCHEDULE: false

@@ -225,6 +225,16 @@ class SphereEscher:
                 self.orbifold.b,
                 self.orbifold.initial_guess(),
                 warm_start=a.WARM_START,
+                # Solver acceleration (escher/OTE/core/spherical/): all default to
+                # the reference behavior, all verified against the golden MATLAB
+                # solution and the finite-difference gradient gate.
+                cache_affine=bool(a.get("SOLVER_CACHE_AFFINE", False)),
+                precond_every=int(a.get("SOLVER_PRECOND_EVERY", 1) or 1),
+                two_loop_order=str(a.get("SOLVER_TWO_LOOP_ORDER", "reference")),
+                memory=int(a.get("SOLVER_MEMORY", 3) or 3),
+                tol_grad=float(a.get("SOLVER_TOL_GRAD", 0.0) or 0.0),
+                line_search=str(a.get("SOLVER_LINE_SEARCH", "backtrack")),
+                adjoint_reuse_factor=bool(a.get("ADJOINT_REUSE_FACTOR", False)),
             )
         cones_label = (
             tuple(a.ORBIFOLD_CONES)

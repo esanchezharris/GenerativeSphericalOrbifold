@@ -106,9 +106,14 @@ def solve_spherical_embedding(
     memory: int = 3,
     tol_x: float = 1e-10,
     tol_fun: float = 0.0,
+    tol_grad: float = 0.0,
     max_iter: int = 10_000,
     constraint_tol: float = 1e-6,
     device: str = "cpu",
+    affine: AffineSpace | None = None,
+    precond: Precond | None = None,
+    two_loop_order: str = "reference",
+    line_search: str = "backtrack",
 ) -> SphericalEmbeddingResult:
     """Run the two-stage solve and return vertices on the unit sphere.
 
@@ -124,20 +129,37 @@ def solve_spherical_embedding(
         ValueError: if the normalised result violates the orbifold constraints by more than
             ``constraint_tol``, mirroring the reference's assertion.
     """
-    affine = AffineSpace(A, b)
+    # ``affine`` and ``precond`` may be supplied by a caller that holds them across
+    # solves. AffineSpace is a pure function of (A, b) -- and in weights mode A and
+    # b are run constants -- so rebuilding it per solve repeated a dense eigvalsh
+    # and Cholesky for nothing. PrecondFixed is only a PRECONDITIONER: a stale one
+    # changes the route, never the fixed point (measured: refreshing every 5 steps,
+    # or even once, leaves the iteration count flat).
+    if affine is None:
+        affine = AffineSpace(A, b)
     objective = make_karcher_objective(edges, weights, device=device)
 
     # Stage 1 -- Laplacian-preconditioned.
     solver = ProjectedLBFGS(
-        objective, x0, affine, PrecondFixed(laplacian, affine), memory=memory
+        objective,
+        x0,
+        affine,
+        precond if precond is not None else PrecondFixed(laplacian, affine),
+        memory=memory,
+        two_loop_order=two_loop_order,
+        line_search=line_search,
     )
-    stage1 = solver.solve(tol_x=tol_x, tol_fun=tol_fun, max_iter=max_iter)
+    stage1 = solver.solve(
+        tol_x=tol_x, tol_fun=tol_fun, tol_grad=tol_grad, max_iter=max_iter
+    )
 
     # Stage 2 -- identity preconditioner, memory cleared. ``memory=0`` keeps ``curr_m`` at 0,
     # so this is projected steepest descent, exactly as ``updateMemory(0)`` gives in MATLAB.
     solver.update_precond(PrecondIdentity())
     solver.update_memory(0)
-    stage2 = solver.solve(tol_x=tol_x, tol_fun=tol_fun, max_iter=max_iter)
+    stage2 = solver.solve(
+        tol_x=tol_x, tol_fun=tol_fun, tol_grad=tol_grad, max_iter=max_iter
+    )
 
     points = stage2.x.reshape(-1, 3)
     radii = np.linalg.norm(points, axis=1)
