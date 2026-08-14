@@ -345,6 +345,7 @@ class SphereEscher:
             enable_channels_last_format=bool(a.get("CHANNELS_LAST", False)),
             torch_compile=bool(a.get("TORCH_COMPILE", False)),
             noise_samples=int(a.get("SDS_NOISE_SAMPLES", 1) or 1),
+            sds_encoder=str(a.get("SDS_ENCODER", "vae") or "vae"),
         )
         self.guidance = sd.StableDiffusion(cfg)
         # The silhouette pass shows the model a flat solid shape, so it gets a prompt that

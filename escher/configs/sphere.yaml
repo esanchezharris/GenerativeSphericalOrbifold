@@ -152,6 +152,15 @@ PRETRAINED_MODEL_NAME_OR_PATH: "Manojb/stable-diffusion-2-1-base"
 # base.yaml uses 100. That suits the planar setup but here it drives the texture into
 # high-frequency artefacts; 50 trades a little prompt fidelity for markedly cleaner figures.
 GUIDANCE_SCALE: 50.0
+# Which encoder maps the render into SD latent space. MEASURED (timing.csv over 14
+# full runs): the encoder is ~48% of wall clock -- it is the ONLY network in the
+# SDS backward, so we pay it twice, and it costs 2.1x the diffusion UNet it feeds.
+#   "vae"       AutoencoderKL, posterior sample -- every prior run, the default
+#   "vae_mean"  same encoder, posterior MEAN (control: isolates the sampling noise)
+#   "taesd"     madebyollin/taesd -- ~1.2M params, no GroupNorm, no attention;
+#               emits SD's already-scaled latents (its scaling_factor is 1.0)
+#   "taesd_bwd" SD latents in the forward, TAESD's Jacobian in the backward
+SDS_ENCODER: "vae"
 USE_HALF_PRECISION: true
 CLIP_GRADIENTS_IN_SDS: true
 

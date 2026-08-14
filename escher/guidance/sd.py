@@ -81,6 +81,20 @@ class Config:
     # variance at N UNet evals. A run-to-run-consistency lever.
     noise_samples: int = 1
 
+    # Which encoder maps rendered pixels -> SD latents. MEASURED (timing.csv over
+    # 14 full runs): the encoder is ~48% of wall clock -- ~118 ms forward plus
+    # ~170 ms backward of a 602 ms step -- because it is the ONLY network in the
+    # backward. That is 2.1x the diffusion UNet it feeds (129 ms).
+    #   "vae"       AutoencoderKL, posterior SAMPLE -- every historical run
+    #   "vae_mean"  AutoencoderKL, posterior MEAN -- control isolating the sampling noise
+    #   "taesd"     AutoencoderTiny: ~1.2M params, no GroupNorm, no attention,
+    #               and its config.scaling_factor is 1.0 because it emits SD's
+    #               ALREADY-SCALED latents (verified against diffusers 0.39)
+    #   "taesd_bwd" SD latents in the forward (no_grad) + TAESD's Jacobian in the
+    #               backward via straight-through -- the quality fallback
+    sds_encoder: str = "vae"
+    taesd_model_name_or_path: str = "madebyollin/taesd"
+
 
 class StableDiffusion(nn.Module):
     def __init__(self, cfg: Config = Config()):
@@ -124,6 +138,10 @@ class StableDiffusion(nn.Module):
 
         if self.cfg.enable_channels_last_format:
             self.pipe.unet.to(memory_format=torch.channels_last)
+            # NHWC is the tensor-core layout for an fp16 conv stack, and since the
+            # encoder is the hot network (48% of the step) it wants this at least
+            # as much as the UNet does.
+            self.pipe.vae.to(memory_format=torch.channels_last)
 
         # Create model
         self.vae = self.pipe.vae
@@ -145,9 +163,31 @@ class StableDiffusion(nn.Module):
 
             tomesd.apply_patch(self.unet, **self.cfg.token_merging_params)
 
+        # The tiny distilled encoder, loaded only when armed. self.vae is KEPT
+        # either way: it is 168 MiB of fp16 weights (the win is in ACTIVATIONS,
+        # not parameters), decode_latents still needs it, and "taesd_bwd" runs
+        # both encoders.
+        self.taesd = None
+        if self.cfg.sds_encoder in ("taesd", "taesd_bwd"):
+            from diffusers import AutoencoderTiny
+
+            print(f"Loading TAESD encoder from {self.cfg.taesd_model_name_or_path}")
+            self.taesd = AutoencoderTiny.from_pretrained(
+                self.cfg.taesd_model_name_or_path,
+                torch_dtype=self.weights_dtype,
+            ).to(self.device)
+            for p in self.taesd.parameters():
+                p.requires_grad_(False)
+            if self.cfg.enable_channels_last_format:
+                self.taesd.to(memory_format=torch.channels_last)
+
         if self.cfg.torch_compile:
             self.unet = torch.compile(self.unet)
-            self.vae.encoder = torch.compile(self.vae.encoder)
+            # Compile whichever encoders are actually on the hot path.
+            if self.cfg.sds_encoder in ("vae", "vae_mean", "taesd_bwd"):
+                self.vae.encoder = torch.compile(self.vae.encoder)
+            if self.taesd is not None:
+                self.taesd.encoder = torch.compile(self.taesd.encoder)
 
         if self.cfg.use_sjc:
             # score jacobian chaining use DDPM
@@ -210,11 +250,39 @@ class StableDiffusion(nn.Module):
 
     @torch.cuda.amp.autocast(enabled=False)
     def encode_images(self, imgs: Float[Tensor, "B 3 512 512"]) -> Float[Tensor, "B 4 64 64"]:
+        """Rendered pixels -> SD latents. The single dispatch point for SDS_ENCODER.
+
+        Both encoder branches multiply by their OWN ``config.scaling_factor`` rather
+        than a literal: AutoencoderKL's is 0.18215 and AutoencoderTiny's is 1.0
+        (TAESD emits already-scaled latents), so reading it off the active model
+        keeps the convention self-documenting instead of relying on a comment.
+        """
         input_dtype = imgs.dtype
-        imgs = imgs * 2.0 - 1.0
-        posterior = self.vae.encode(imgs.to(self.weights_dtype)).latent_dist
-        latents = posterior.sample() * self.vae.config.scaling_factor
+        x = (imgs * 2.0 - 1.0).to(self.weights_dtype)  # both encoders take [-1, 1]
+        mode = self.cfg.sds_encoder
+        if mode == "taesd":
+            latents = self._encode_taesd(x)
+        elif mode == "taesd_bwd":
+            # Straight-through: the VALUE is exactly the SD latent (so the UNet sees
+            # no distribution shift and the score is evaluated at the true point);
+            # only the pullback J^T is TAESD's.
+            with torch.no_grad():
+                z_sd = self._encode_vae(x, sample=True)
+            z_t = self._encode_taesd(x)
+            latents = z_t + (z_sd - z_t).detach()
+        else:
+            latents = self._encode_vae(x, sample=(mode != "vae_mean"))
         return latents.to(input_dtype)
+
+    def _encode_vae(self, x: Tensor, sample: bool) -> Tensor:
+        posterior = self.vae.encode(x).latent_dist
+        z = posterior.sample() if sample else posterior.mean
+        return z * self.vae.config.scaling_factor
+
+    def _encode_taesd(self, x: Tensor) -> Tensor:
+        # AutoencoderTiny returns .latents (no latent_dist -- it is deterministic,
+        # there is no posterior to sample). Same 8x downscale as the SD VAE.
+        return self.taesd.encode(x).latents * self.taesd.config.scaling_factor
 
     @torch.cuda.amp.autocast(enabled=False)
     def decode_latents(
@@ -324,8 +392,17 @@ class StableDiffusion(nn.Module):
         if rgb_as_latents:
             latents = F.interpolate(rgb_BCHW, (64, 64), mode="bilinear", align_corners=False)
         else:
-            rgb_BCHW_512 = F.interpolate(rgb_BCHW, (512, 512), mode="bilinear", align_corners=False)
-            # encode image into latents with vae
+            # Skip the resize when the render is already 512 (RENDER_SIZE 512 is
+            # the production setting, so this fired every step for nothing). A
+            # bilinear resize to the SAME size with align_corners=False maps out[i]
+            # to src[i] with weights (1, 0), i.e. it is the identity -- so this is
+            # bit-exact, not merely statistically equivalent.
+            rgb_BCHW_512 = rgb_BCHW
+            if rgb_BCHW.shape[-2:] != (512, 512):
+                rgb_BCHW_512 = F.interpolate(
+                    rgb_BCHW, (512, 512), mode="bilinear", align_corners=False
+                )
+            # encode image into latents with the configured encoder
             latents = self.encode_images(rgb_BCHW_512)
 
         # timestep ~ U(0.02, 0.98) to avoid very high/low noise level
