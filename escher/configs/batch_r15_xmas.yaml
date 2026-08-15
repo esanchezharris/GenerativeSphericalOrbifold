@@ -1,0 +1,64 @@
+# Round 15 -- the remaining ornament subjects, on the FAST stack.
+#
+#   python -m escher.pipeline escher/configs/batch_r15_xmas.yaml
+#
+# Round 13 got the tree and the snowman through on the clean stack before the
+# batch was stopped; this finishes the set on sphere_texture_octa_fast.yaml
+# (2.7x faster AND double texture resolution, measured quality-neutral over the
+# 7-arm batch_r14_accel night). ~26 min/figure instead of 70, so all four land
+# in under two hours.
+#
+# The stocking is RESTARTED rather than resumed: its round-13 partial ran the
+# clean stack at TEXTURE_RESOLUTION 256, and resuming that under a different
+# encoder and resolution would produce a run whose first 4840 steps and last
+# 2160 came from different methods -- not something worth having in the gallery.
+#
+# What to expect, from round 13's evidence: compact curled silhouettes tile
+# (fish, tree, gingerbread all articulated past 1.7x); the snowman was legible
+# but left genuine black gaps because a convex stack of circles CANNOT
+# interlock. Reindeer (limbed + antlered) and candy cane (thin, elongated) are
+# the two hardest silhouettes in the set and are expected to struggle for the
+# same structural reason -- they are pre-registered as hard mode, and a weak
+# result from them is a figure-tileability finding, not a recipe regression.
+# The round-6 lever if they do struggle is phrasing the silhouette FOR tiling
+# ("limbs hugged to the body"), which took gingerbread from 0.788 to 0.830.
+
+batch_name: r15_xmas
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml, configs/sphere_texture_octa_clean.yaml, configs/sphere_texture_octa_fast.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+
+jobs:
+  - figure: xmas_stocking
+    prompt: "A professional cartoon of a Christmas stocking, a masterpiece, on a white background"
+
+  - figure: xmas_reindeer          # hard mode: limbed + antlered
+    prompt: "A professional cartoon of a reindeer, a masterpiece, on a white background"
+
+  - figure: xmas_candycane         # hard mode: thin / elongated
+    prompt: "A professional cartoon of a candy cane, a masterpiece, on a white background"
+
+  # The articulation-capacity lever, cancelled twice now (round 11 mid-flight,
+  # round 13 never reached). 224 boundary vertices instead of 160: does the
+  # richer boundary family beat the 1.7-1.8x perimeters the 160-vert runs reach?
+  # The solver work pays off hardest here -- KITE_N 56 was the slowest geometry
+  # in the project (solve 202 ms, adjoint ~120).
+  - figure: ginger_kite56
+    prompt: "A professional cartoon of a gingerbread man, a masterpiece, on a white background"
+    reuse_carve: runs/r11/prep/identity56/checkpoint.pt
+    stages:
+      texture:
+        KITE_N: 56
