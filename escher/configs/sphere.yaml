@@ -184,6 +184,14 @@ ISOLATED_TILE_FRACTION: 0.5
 # and the crop keep framing the centre tile, so the figure's size in frame is
 # unchanged; only its surroundings become real neighbours. Costs one extra
 # solid-texture render (~2.6 ms of a ~220 ms step) to get the centre alpha.
+#
+# MEASURED FRAMING (sweep at ISOLATED_DISTANCE 2.4, gingerbread): the centre
+# tile holds 40% of the frame at EVERY neighbour count -- the camera pinning
+# works -- but the background shrinks 60% -> 21% -> 11% -> 5% at 0/2/3/6
+# neighbours. Background is where the outline gradients live (round 2: with no
+# background pixels dr.antialias has no silhouette discontinuity and vertex
+# gradients are exactly zero), and a 250-step smoke at 6 confirmed it: the
+# perimeter stalled at 1.038 where the control reaches ~1.29. USE 2, at most 3.
 ISOLATED_NEIGHBOURS: 0
 # Must be close enough that the TILE fills the frame. At 2.6 a lone tile covers only ~1/8 of
 # the view, which teaches the model to paint small figures -- the opposite of what is wanted.
