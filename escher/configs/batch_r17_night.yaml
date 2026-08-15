@@ -1,0 +1,85 @@
+# Round 17 -- overnight iteration on the round-16b results.
+#
+#   python -m escher.pipeline escher/configs/batch_r17_night.yaml
+#
+# USER GOALS (2026-08-15): (a) eliminate obvious tile meeting points, (b) get
+# rid of non-subject background fill, (c) a fourth colour.
+#
+# (c) is solved at render time and every arm here exercises it: the palette
+# assignment is now balanced and pinwheel-aware, and with FOUR colours every
+# one of the 14 rotation centres shows the full palette -- no colour ever
+# repeats where tiles meet (tests pin this). COLORIZE_PALETTE below is
+# XMAS4: red / green / gold / frost blue.
+#
+# (a) and (b) build on round 16: the wide prompt is the base (the only lever
+# that kept readable figures), the white-fill penalty is the direct charge on
+# unpainted texels, and the new TEXTURE_FILL_CORNER_FLOOR blends a uniform
+# base under the corner peaks so ONE term charges the rotation-centre pockets
+# hard and any background filler mildly.
+#
+# JUDGE THE FIGURE FIRST, the numbers second (round-16a lesson: nbr3 scored a
+# perfect 0.00 on every corner because the figures dissolved).
+
+batch_name: r17_night
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a gingerbread man with long arms and legs stretched wide, a masterpiece, on a white background"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml, configs/sphere_texture_octa_clean.yaml, configs/sphere_texture_octa_fast.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+      TEXTURE_FILL_WHITE_LEVEL: 0.85
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42], [0.58, 0.73, 0.88]]
+
+jobs:
+  # --- the new lever: corner peaks + uniform floor, one term for both goals
+  - figure: wide_floor
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+        TEXTURE_FILL_CORNER_FLOOR: 0.1
+
+  - figure: wide_floor25        # stronger whole-tile charge; watch the icing
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+        TEXTURE_FILL_CORNER_FLOOR: 0.25
+
+  # --- articulation capacity: can limbs REACH the corners with more boundary
+  # verts? (KITE_N 56 = 224 boundary verts vs 160; identity56 prepped in R11.)
+  - figure: wide_floor_kite56
+    reuse_carve: runs/r11/prep/identity56/checkpoint.pt
+    stages:
+      texture:
+        KITE_N: 56
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+        TEXTURE_FILL_CORNER_FLOOR: 0.1
+
+  # --- seed stability of the round-16b corner-focused lever
+  - figure: wide_white_hi_s1
+    texture_seeds: [1]
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+
+  # --- more pure-outline passes: drop 75 forces the OUTLINE to carry the
+  # stretched limbs the prompt asks for
+  - figure: wide_drop75
+    stages:
+      texture:
+        TEXTURE_DROP_PROB: 75
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
