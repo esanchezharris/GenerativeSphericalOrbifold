@@ -209,6 +209,12 @@ TEXTURE_FILL_WHITE_LEVEL: 0.85   # matches metrics_rosette.WHITE_LEVEL
 # neighbourhood). Focusing protects legitimate white elsewhere -- icing,
 # highlights -- which a uniform penalty would flatten along with the pockets.
 TEXTURE_FILL_CORNER_UV: 0.0
+# Uniform base blended under the corner peaks: weight = floor + (1-floor)*gaussian.
+# The pure Gaussian gives mid-tile texels ~zero weight, so corner focus and
+# whole-tile fill were an either/or; a small floor (e.g. 0.1) charges the
+# rotation-centre pockets hard AND any background filler mildly, in one term.
+# Only read when TEXTURE_FILL_CORNER_UV > 0.
+TEXTURE_FILL_CORNER_FLOOR: 0.0
 # Must be close enough that the TILE fills the frame. At 2.6 a lone tile covers only ~1/8 of
 # the view, which teaches the model to paint small figures -- the opposite of what is wanted.
 ISOLATED_DISTANCE: 1.7

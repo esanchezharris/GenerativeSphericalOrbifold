@@ -829,6 +829,12 @@ class SphereEscher:
         ``TEXTURE_FILL_CORNER_UV`` 0 = charge the whole tile equally; > 0 focuses
         the penalty on the cone corners, which is where the rosettes are and
         where the interior paint we want to keep is not.
+
+        ``TEXTURE_FILL_CORNER_FLOOR`` blends a uniform base under the corner
+        peaks: weight = floor + (1 - floor) * gaussian. The pure Gaussian gives
+        mid-tile texels ~zero weight, so corner focus and whole-tile fill were
+        an either/or -- the floor makes one term serve both (charge the
+        rotation-centre pockets hard AND any background filler mildly).
         """
         radius = float(self.args.get("TEXTURE_FILL_CORNER_UV", 0.0) or 0.0)
         if radius <= 0:
@@ -839,9 +845,13 @@ class SphereEscher:
                 for n in ("cone1", "cone2a", "cone3", "cone2b")
                 if hasattr(self.mesh, n)
             ]
-            self._corner_w = corner_weight_map(
+            w = corner_weight_map(
                 self.mesh.uv, corners, int(self.args.TEXTURE_RESOLUTION), radius
-            ).to(self.device)
+            )
+            floor = float(self.args.get("TEXTURE_FILL_CORNER_FLOOR", 0.0) or 0.0)
+            if floor > 0:
+                w = floor + (1.0 - floor) * w
+            self._corner_w = w.to(self.device)
         return self._corner_w
 
     def neighbour_tiler(self, k: int):

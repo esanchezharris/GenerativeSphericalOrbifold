@@ -71,6 +71,28 @@ def test_corner_weighting_focuses_the_penalty():
     assert c > 10 * m, f"corner pocket {c:.3e} should dominate interior {m:.3e}"
 
 
+def test_corner_floor_charges_mid_tile_without_losing_corner_focus():
+    """weight = floor + (1-floor)*gaussian: a mid-tile pocket must now cost
+    something (the pure Gaussian gave it ~zero weight), while the same pocket at
+    a corner still costs several times more."""
+    res = 64
+    uv = torch.tensor([[0.5, 0.05], [0.5, 0.5]])
+    w = corner_weight_map(uv, [0], res, radius=0.12)
+    floor = 0.1
+    w = floor + (1.0 - floor) * w
+
+    valid = torch.ones(res, res, dtype=torch.bool)
+    at_corner = torch.full((res, res), 0.4)
+    at_corner[int(0.05 * res) - 1 : int(0.05 * res) + 2, res // 2 - 1 : res // 2 + 2] = 1.0
+    mid = torch.full((res, res), 0.4)
+    mid[res // 2 - 1 : res // 2 + 2, res // 2 - 1 : res // 2 + 2] = 1.0
+
+    c = float(texture_white_loss(at_corner, valid, 0.85, w))
+    m = float(texture_white_loss(mid, valid, 0.85, w))
+    assert m > 0.0, "the floor must charge mid-tile pockets"
+    assert c > 3 * m, f"corner {c:.3e} should still dominate mid-tile {m:.3e}"
+
+
 def test_uniform_weighting_treats_the_tile_equally():
     res = 32
     valid = torch.ones(res, res, dtype=torch.bool)
