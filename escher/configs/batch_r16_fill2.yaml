@@ -1,0 +1,82 @@
+# Round 16b -- THE DIRECT LEVER: charge for unpainted texels.
+#
+#   python -m escher.pipeline escher/configs/batch_r16_fill2.yaml
+#
+# The context arms in batch_r16_fill.yaml (tiled views, neighbour rings) all bet
+# that if SDS can SEE the rosettes it will paint them out. The early evidence is
+# against the whole-sphere version of that bet: tiled_75 moved the worst corner
+# 31.75 -> 29.75 deg and white area 0.374 -> 0.330, which is inside this
+# metric's run-to-run range. The likely reason is salience -- on a whole-sphere
+# view each rosette is a few pixels of a 512px image, and the score has almost
+# no gradient to give about a 3-pixel speck.
+#
+# This batch does not rely on the diffusion model noticing anything. It puts
+# direct pressure on the atlas: a quadratic charge on luminance above
+# TEXTURE_FILL_WHITE_LEVEL over the rasterized texels. Merely-light paint is
+# free; only genuinely blank texels are billed.
+#
+# The knob that matters is TEXTURE_FILL_CORNER_UV. Uniform (0) charges the whole
+# tile, which also flattens legitimate white -- icing, highlights, the very
+# things that make a gingerbread man read as one. Focused (>0, a Gaussian sigma
+# in UV where the kite spans 0.9) aims it at the cone corners, where the
+# rosettes are and where interior paint is not. So the sweep is over FOCUS and
+# STRENGTH, and the failure mode to watch for is a figure that goes uniformly
+# grey because the penalty ate its highlights.
+
+batch_name: r16_fill2
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a gingerbread man, a masterpiece, on a white background"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml, configs/sphere_texture_octa_clean.yaml, configs/sphere_texture_octa_fast.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+      TEXTURE_FILL_WHITE_LEVEL: 0.85
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+
+jobs:
+  # --- corner-focused: aimed at the rosettes, protects interior white ---------
+  - figure: white_corner_lo
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 200.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+
+  - figure: white_corner_hi        # is the weight or the focus what matters?
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+
+  - figure: white_corner_wide      # a looser focus -- more of the tile charged
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.30
+
+  # --- uniform: the "fill the whole tile" version, and the icing-risk arm -----
+  - figure: white_uniform
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.0
+
+  # --- the combination the diagnosis actually predicts should win -------------
+  # direct pressure at the corners PLUS the neighbour context that makes the
+  # consequence visible; 2 neighbours is the measured limit before the frame
+  # loses the background its outline gradients need.
+  - figure: white_corner_nbr2
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+        ISOLATED_NEIGHBOURS: 2

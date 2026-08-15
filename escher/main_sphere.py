@@ -133,6 +133,61 @@ def texture_fill_loss(
     return shortfall[valid].square().mean()
 
 
+def corner_weight_map(uv, corners, res: int, radius: float) -> torch.Tensor:
+    """Per-texel weight peaking at the tile's cone corners, in UV space.
+
+    The rosettes live at the rotation centres and nowhere else, so a penalty that
+    is uniform over the tile would spend most of its force on interior paint --
+    including legitimate white (icing, highlights) that we want to keep. Weighting
+    by proximity to the pinned corners aims it where the artifact actually is.
+
+    ``radius`` is a Gaussian sigma in UV units (the kite spans 0.9), so 0.15 is a
+    corner neighbourhood and 1.0 is effectively uniform.
+    """
+    ys, xs = torch.meshgrid(
+        torch.arange(res, dtype=torch.float32),
+        torch.arange(res, dtype=torch.float32),
+        indexing="ij",
+    )
+    u = (xs + 0.5) / res
+    v = (ys + 0.5) / res
+    w = torch.zeros(res, res)
+    for idx in corners:
+        cu, cv = float(uv[idx][0]), float(uv[idx][1])
+        d2 = (u - cu) ** 2 + (v - cv) ** 2
+        w = torch.maximum(w, torch.exp(-d2 / (2.0 * radius * radius)))
+    return w
+
+
+def texture_white_loss(
+    texture: torch.Tensor,
+    valid: torch.Tensor,
+    level: float,
+    weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Penalise UNPAINTED (near-white) texels inside the tile.
+
+    The round-16 diagnostic: at every rotation centre the shared atlas holds a
+    flat white pocket -- the stocking measured mean luminance 1.0000 with std
+    EXACTLY 0.0000 over a 32-texel disc -- because each SDS view is one tile on a
+    white background, where stopping short of the corner and leaving white scores
+    perfectly. Those pockets are then replicated by the k tile copies that meet at
+    the centre and lit up by the per-tile colourisation (a diagonal multiply, so
+    white renders at the palette colour at FULL brightness).
+
+    Unlike the chroma floor above, this works under ``BW`` -- where chroma is
+    identically zero and that loss has nothing to push on. Quadratic excess above
+    ``level``, so paint that is merely light is untouched and only genuinely
+    blank texels are charged.
+    """
+    lum = texture[..., 0] if texture.ndim == 3 else texture
+    excess = (lum - level).clamp_min(0.0).square()
+    if weights is None:
+        return excess[valid].mean()
+    w = weights.to(excess.device)[valid]
+    return (excess[valid] * w).sum() / w.sum().clamp_min(1e-8)
+
+
 # Shared with the planar pipeline; re-exported here because tests and older call sites
 # import them from main_sphere.
 from escher.guidance.schedule import annealed_max_step, arm_sds  # noqa: E402,F401
@@ -768,6 +823,27 @@ class SphereEscher:
             self._solo_tiler = SphericalTiler(rotations=np.eye(3)[None], cone_orders=None)
         return self._solo_tiler
 
+    def _corner_weights(self):
+        """Cached per-texel weighting for the white-fill penalty, or None.
+
+        ``TEXTURE_FILL_CORNER_UV`` 0 = charge the whole tile equally; > 0 focuses
+        the penalty on the cone corners, which is where the rosettes are and
+        where the interior paint we want to keep is not.
+        """
+        radius = float(self.args.get("TEXTURE_FILL_CORNER_UV", 0.0) or 0.0)
+        if radius <= 0:
+            return None
+        if not hasattr(self, "_corner_w"):
+            corners = [
+                getattr(self.mesh, n)
+                for n in ("cone1", "cone2a", "cone3", "cone2b")
+                if hasattr(self.mesh, n)
+            ]
+            self._corner_w = corner_weight_map(
+                self.mesh.uv, corners, int(self.args.TEXTURE_RESOLUTION), radius
+            ).to(self.device)
+        return self._corner_w
+
     def neighbour_tiler(self, k: int):
         """The fundamental domain plus its ``k`` nearest group images.
 
@@ -985,6 +1061,17 @@ class SphereEscher:
                 self.texture,
                 self.texture_valid_mask(),
                 float(a.get("TEXTURE_FILL_CHROMA_MIN", 0.15)),
+            )
+        # The BW-capable version: charge for texels the figure never painted.
+        # The chroma floor above cannot help here -- under BW chroma is
+        # identically zero, so it has nothing to push on.
+        white_w = float(a.get("TEXTURE_FILL_WHITE_WEIGHT", 0.0) or 0.0)
+        if white_w > 0:
+            loss = loss + white_w * texture_white_loss(
+                self.effective_texture(),
+                self.texture_valid_mask(),
+                float(a.get("TEXTURE_FILL_WHITE_LEVEL", 0.85)),
+                self._corner_weights(),
             )
         if torch.is_tensor(reg):
             loss = loss + reg.to(loss)

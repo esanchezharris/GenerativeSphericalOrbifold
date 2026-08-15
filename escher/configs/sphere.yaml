@@ -193,6 +193,22 @@ ISOLATED_TILE_FRACTION: 0.5
 # gradients are exactly zero), and a 250-step smoke at 6 confirmed it: the
 # perimeter stalled at 1.038 where the control reaches ~1.29. USE 2, at most 3.
 ISOLATED_NEIGHBOURS: 0
+
+# Charge for texels the figure never painted (0 = off). The round-16 diagnostic
+# found flat white pockets at every rotation centre -- std EXACTLY 0.0000 over a
+# 32-texel disc -- because every SDS view is one tile on white, where leaving the
+# corner blank scores perfectly. Unlike TEXTURE_FILL_WEIGHT (a CHROMA floor) this
+# works under BW, where chroma is identically zero and that loss has nothing to
+# push on. Quadratic excess above the level, so merely-light paint is untouched.
+# Unlike the context levers this does not need the diffusion model to notice
+# anything -- it is direct pressure on the atlas.
+TEXTURE_FILL_WHITE_WEIGHT: 0.0
+TEXTURE_FILL_WHITE_LEVEL: 0.85   # matches metrics_rosette.WHITE_LEVEL
+# 0 = charge the whole tile equally; > 0 is a Gaussian sigma in UV units focusing
+# the penalty on the cone corners (the kite spans 0.9, so 0.15 is a corner
+# neighbourhood). Focusing protects legitimate white elsewhere -- icing,
+# highlights -- which a uniform penalty would flatten along with the pockets.
+TEXTURE_FILL_CORNER_UV: 0.0
 # Must be close enough that the TILE fills the frame. At 2.6 a lone tile covers only ~1/8 of
 # the view, which teaches the model to paint small figures -- the opposite of what is wanted.
 ISOLATED_DISTANCE: 1.7
