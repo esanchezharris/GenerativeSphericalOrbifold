@@ -175,6 +175,16 @@ SILHOUETTE_FIGURE_VALUE: 0.1    # near-black figure, matching the prompt
 SILHOUETTE_BACKGROUND_VALUE: 0.95  # on a near-white background
 
 ISOLATED_TILE_FRACTION: 0.5
+# Surround the isolated tile with this many of its nearest group images instead
+# of flat background (0 = today: the tile alone). The isolated pass exists so SDS
+# grades ONE figure, but on a flat background it also teaches that whatever the
+# figure does not cover is fine -- and it is not: at each rotation centre k tile
+# copies pinwheel around one vertex, so an unpainted corner becomes a
+# conspicuous multicoloured rosette that no single-tile view can show. The camera
+# and the crop keep framing the centre tile, so the figure's size in frame is
+# unchanged; only its surroundings become real neighbours. Costs one extra
+# solid-texture render (~2.6 ms of a ~220 ms step) to get the centre alpha.
+ISOLATED_NEIGHBOURS: 0
 # Must be close enough that the TILE fills the frame. At 2.6 a lone tile covers only ~1/8 of
 # the view, which teaches the model to paint small figures -- the opposite of what is wanted.
 ISOLATED_DISTANCE: 1.7

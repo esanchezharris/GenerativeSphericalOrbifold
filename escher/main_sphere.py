@@ -641,6 +641,7 @@ class SphereEscher:
         shade_ambient: float | None = None,
         points: torch.Tensor | None = None,
         roll_deg: float = 0.0,
+        neighbours: int = 0,
     ):
         """Render the tiling, or a single tile alone against the background.
 
@@ -659,8 +660,12 @@ class SphereEscher:
             cached = getattr(self, "_frozen_cache", None)
             points = cached["points"] if cached is not None else self.solve_points()
         group = self.solo_tiler if isolated else self.tiler
+        # The camera always frames the FUNDAMENTAL DOMAIN (`group`); only the
+        # geometry may be widened to include neighbours, so adding context never
+        # changes where the view is pointed or how big the centre figure is.
+        geom_group = self.neighbour_tiler(neighbours) if (isolated and neighbours) else group
         sphere = build_tiled_sphere(
-            points.to(self.device).float(), self.mesh.faces, self.mesh.uv, group
+            points.to(self.device).float(), self.mesh.faces, self.mesh.uv, geom_group
         )
         if mv is None and self.args.TILE_CENTRIC_VIEWS:
             centers = group.tile_centers(points.detach().cpu().numpy())
@@ -673,6 +678,10 @@ class SphereEscher:
                 angular_jitter_deg=self.args.VIEW_JITTER_DEG,
                 roll_deg=roll_deg,
             )
+        # Published so a caller can render a second pass through the SAME camera
+        # (the neighbour-context path needs the centre tile's alpha for cropping,
+        # and tile_centric_views is randomised, so re-deriving it would not match).
+        self._last_mv = mv
         images, alpha = render_tiled_sphere(
             sphere,
             self.effective_texture() if texture is None else texture,
@@ -758,6 +767,39 @@ class SphereEscher:
         if not hasattr(self, "_solo_tiler"):
             self._solo_tiler = SphericalTiler(rotations=np.eye(3)[None], cone_orders=None)
         return self._solo_tiler
+
+    def neighbour_tiler(self, k: int):
+        """The fundamental domain plus its ``k`` nearest group images.
+
+        The isolated pass exists so SDS grades ONE figure, but composited on a
+        flat background it also teaches that whatever the figure does not cover
+        is fine as-is. It is not: at each rotation centre k copies of the tile
+        pinwheel around one vertex, so an unpainted corner is replicated into a
+        conspicuous multicoloured rosette -- something no single-tile view can
+        show. Rendering the ring of neighbours puts that consequence in the
+        image, and therefore in the loss.
+
+        Identity is always element 0, so callers can find the centre tile.
+        Neighbours are chosen by tile-centre proximity, which picks up both the
+        edge-sharing tiles and the ones that meet only at a cone point (exactly
+        where the rosettes form).
+        """
+        from escher.geometry.sphere_tiler import SphericalTiler
+
+        cache = getattr(self, "_neighbour_tilers", None)
+        if cache is None:
+            cache = self._neighbour_tilers = {}
+        if k not in cache:
+            rots = np.asarray(self.tiler.rotations, dtype=np.float64)
+            centre = self.tiler.tile_centers(self.mesh.points)[0]
+            centres = np.einsum("gij,j->gi", rots, centre)
+            order = np.argsort(-(centres @ centre))  # nearest first; identity is its own
+            keep = [g for g in order if not np.allclose(rots[g], np.eye(3))][: max(k, 0)]
+            cache[k] = SphericalTiler(
+                rotations=np.concatenate([np.eye(3)[None], rots[keep]]),
+                cone_orders=None,
+            )
+        return cache[k]
 
     def shape_frozen(self, iteration: int) -> bool:
         """Whether the shape phase has ended, by step count or by condition.
@@ -850,6 +892,14 @@ class SphereEscher:
         if isolated and not frozen:
             roll_deg = float(a.get("ISOLATED_ROLL_DEG", 0.0) or 0.0)
 
+        # Neighbour context, isolated + unfrozen only: surround the tile with its
+        # real group images instead of flat background, so the rosettes that form
+        # where corners meet are visible to the score. Frozen or tiled passes
+        # already show context or cannot act on it.
+        nbrs = 0
+        if isolated and not frozen:
+            nbrs = int(a.get("ISOLATED_NEIGHBOURS", 0) or 0)
+
         with self.timer.phase("render"):
             images, alpha, points = self.render(
                 a.IMAGE_BATCH_SIZE,
@@ -857,7 +907,22 @@ class SphereEscher:
                 points=points_in,
                 texture=tex_in,
                 roll_deg=roll_deg,
+                neighbours=nbrs,
             )
+            # The crop must keep framing the CENTRE tile; cropping to the whole
+            # patch's alpha would zoom out and shrink the figure, undoing the
+            # frame-filling property the crop exists for. One extra solid-texture
+            # render of the fundamental domain gives that alpha (render is ~2.6 ms
+            # of a ~220 ms step), reusing the same camera so the boxes agree.
+            crop_alpha = alpha
+            if nbrs and bool(a.get("CROP_RENDERINGS", False)):
+                _, crop_alpha, _ = self.render(
+                    a.IMAGE_BATCH_SIZE,
+                    isolated=True,
+                    points=points_in,
+                    texture=self.solid_texture,
+                    mv=self._last_mv,
+                )
 
         if a.RANDOM_BACKGROUND:
             bg = torch.rand(images.shape[0], 1, 1, 3, device=self.device)
@@ -871,7 +936,7 @@ class SphereEscher:
         if isolated and bool(a.get("CROP_RENDERINGS", False)):
             from escher.rendering.crop_rendering import crop_composited
 
-            composited = crop_composited(composited, alpha)
+            composited = crop_composited(composited, crop_alpha)
 
         # train_step returns (loss, sampled timestep); the timestep is diagnostic only.
         with self.timer.phase("sds"):
