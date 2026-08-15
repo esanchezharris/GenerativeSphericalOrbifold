@@ -13,6 +13,7 @@ import torch
 from escher.OTE.tilings_sphere.boundary_explicit import BoundaryExplicitDihedral
 from escher.rendering.palette import (
     assign_palette_indices,
+    cone_pinwheels,
     hue_rotation_matrix,
     tile_adjacency,
     tile_color_matrices,
@@ -95,6 +96,46 @@ def test_octahedral_tiling_is_three_colorable():
     colors = assign_palette_indices(tiler, orb.mesh, n_colors=3)
     for a, b in pairs:
         assert colors[a] != colors[b]
+
+
+def test_octahedral_pinwheels_are_the_fourteen_rotation_centres():
+    """(2,3,4): 6 four-fold centres carry 4 wedges, 8 three-fold centres carry 6
+    (alternating cone2a/cone2b corners of six tiles). The 12 two-fold centres carry
+    only 2 and must be excluded -- the figure paints straight through them."""
+    from escher.OTE.tilings_sphere.boundary_explicit_triple import BoundaryExplicitTriple
+
+    orb = BoundaryExplicitTriple.from_resolution((2, 3, 4), n=6)
+    wheels = cone_pinwheels(orb.tiler(), orb.mesh)
+    assert sorted(len(w) for w in wheels) == [4] * 6 + [6] * 8
+
+
+@pytest.mark.parametrize("n_colors,expected", [(3, [8, 8, 8]), (4, [6, 6, 6, 6])])
+def test_octahedral_coloring_is_balanced_and_proper(n_colors, expected):
+    """First-found proper colorings shipped [9, 10, 5] -- and at n=4 the fourth
+    color went entirely unused. Balance is what makes a 4-color palette real."""
+    from escher.OTE.tilings_sphere.boundary_explicit_triple import BoundaryExplicitTriple
+
+    orb = BoundaryExplicitTriple.from_resolution((2, 3, 4), n=6)
+    tiler = orb.tiler()
+    colors = assign_palette_indices(tiler, orb.mesh, n_colors=n_colors)
+    assert sorted(np.bincount(colors, minlength=n_colors).tolist()) == sorted(expected)
+    for a, b in tile_adjacency(tiler, orb.mesh):
+        assert colors[a] != colors[b]
+
+
+def test_four_colors_fully_diversify_every_rotation_centre():
+    """Measured optimum, pinned: with four colors the hill-climb reaches full
+    palette diversity at ALL 14 rotation centres -- all 4 colors distinct around
+    every 4-fold centre and all 4 present around every 6-wedge centre. This is
+    the render-side answer to the meeting-point artifact: no color ever repeats
+    where tiles pinwheel."""
+    from escher.OTE.tilings_sphere.boundary_explicit_triple import BoundaryExplicitTriple
+
+    orb = BoundaryExplicitTriple.from_resolution((2, 3, 4), n=6)
+    tiler = orb.tiler()
+    colors = assign_palette_indices(tiler, orb.mesh, n_colors=4)
+    for wheel in cone_pinwheels(tiler, orb.mesh):
+        assert len({int(colors[t]) for t in wheel}) == 4, (wheel, colors[wheel])
 
 
 def test_tile_color_matrices_draws_from_the_palette():
