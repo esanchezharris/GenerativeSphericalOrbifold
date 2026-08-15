@@ -83,3 +83,16 @@ jobs:
         TEXTURE_DROP_PROB: 75
         TEXTURE_FILL_WHITE_WEIGHT: 1000.0
         TEXTURE_FILL_CORNER_UV: 0.15
+
+  # --- attack the SDS side of the corner equilibrium: round-16b measured that
+  # raising the penalty 5x only moved the corner core 78% -> 61% white, because
+  # SDS repaints the corners white every step. Round 12 proved white COMPOSITING
+  # (kept!) is what kills the murk, not the prompt clause -- so drop the clause
+  # and weaken the white prior where the penalty is fighting it.
+  - figure: wide_noclause_floor
+    prompt: "A professional cartoon of a gingerbread man with long arms and legs stretched wide, a masterpiece"
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+        TEXTURE_FILL_CORNER_FLOOR: 0.1
