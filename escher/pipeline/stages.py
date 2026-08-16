@@ -155,6 +155,8 @@ def render_params(plan: JobPlan, tseed: int, dry_run: bool) -> dict:
         # COLORIZE_PALETTE (a list of RGB triples) implies on; bare COLORIZE
         # uses the default palette. See render_final.finalize.
         "colorize": over.get("COLORIZE_PALETTE") or over.get("COLORIZE"),
+        "colorize_mode": over.get("COLORIZE_MODE"),
+        "colorize_gate": over.get("COLORIZE_GATE"),
     }
 
 
@@ -243,10 +245,13 @@ def _stage_texture(params: dict) -> dict:
 def _stage_render(params: dict) -> dict:
     from escher.render_final import finalize
 
+    gate = params.get("colorize_gate")
     result = finalize(
         params["checkpoint"],
         tint=params.get("tint"),
         colorize=params.get("colorize"),
+        colorize_mode=params.get("colorize_mode"),
+        colorize_gate=tuple(gate) if gate else None,
         turntable=not params.get("dry_run"),
     )
     if not result["geometry_ok"]:

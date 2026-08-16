@@ -137,6 +137,26 @@ def test_finalize_explicit_colorize_beats_config_tint(tmp_path, capsys):
     assert "tinting" not in out
 
 
+def test_finalize_threads_colorize_mode_and_gate(tmp_path, capsys):
+    """COLORIZE_MODE/COLORIZE_GATE reach finalize: explicit argument wins and is
+    announced (the render stage forwards these; turntable=False keeps it CPU)."""
+    from escher.render_final import finalize
+
+    escher, _ = bw_escher(tmp_path)
+    escher.output_dir.mkdir(parents=True, exist_ok=True)
+    escher.save_checkpoint(0)
+    finalize(
+        escher.output_dir / "checkpoint.pt",
+        colorize=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        colorize_mode="figure",
+        colorize_gate=(0.6, 0.8),
+        turntable=False,
+        gutter=False,
+    )
+    out = capsys.readouterr().out
+    assert "colorize mode figure, gate (0.6, 0.8)" in out
+
+
 def test_colorize_matrices_are_diagonal_palette_scalers(tmp_path):
     from escher.rendering.palette import assign_palette_indices, colorize_matrices
 

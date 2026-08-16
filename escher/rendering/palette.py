@@ -23,9 +23,12 @@ __all__ = [
     "assign_palette_indices",
     "tile_color_matrices",
     "colorize_matrices",
+    "apply_tile_color",
+    "COLOR_MODES",
     "PASTEL_PALETTE",
     "XMAS_PALETTE",
     "XMAS4_PALETTE",
+    "XMAS_WHITE_PALETTE",
 ]
 
 # Colorization palettes (RGB scalers). Pastel = the fake-sphere family;
@@ -38,6 +41,17 @@ XMAS4_PALETTE = [
     [0.38, 0.64, 0.40],
     [0.93, 0.78, 0.42],
     [0.58, 0.73, 0.88],
+]
+# XMAS_WHITE: red / green / gold plus identity white. Under COLORIZE_MODE
+# "figure" a white tile keeps its greyscale figure on white ground (reads as
+# iced/snow figures joining the alternation). CAVEAT (pinned by test): in "ink"
+# mode the white entry maps the whole tile to white (I - I = 0) and the figure
+# vanishes -- pair white with "figure" mode.
+XMAS_WHITE_PALETTE = [
+    [0.86, 0.30, 0.30],
+    [0.38, 0.64, 0.40],
+    [0.93, 0.78, 0.42],
+    [1.00, 1.00, 1.00],
 ]
 
 
@@ -201,6 +215,58 @@ def tile_color_matrices(tiler, mesh, hues_deg) -> torch.Tensor:
     """(G, 3, 3) per-tile color matrices from a palette of hue angles."""
     indices = assign_palette_indices(tiler, mesh, len(hues_deg))
     return torch.stack([hue_rotation_matrix(float(hues_deg[i])) for i in indices])
+
+
+#: Per-pixel colour-transfer modes for the tiled renderer.
+COLOR_MODES = ("flat", "figure", "ink")
+
+
+def apply_tile_color(
+    col: torch.Tensor,
+    mtx: torch.Tensor,
+    mode: str = "flat",
+    gate: tuple[float, float] = (0.65, 0.85),
+) -> torch.Tensor:
+    """Apply per-tile colour matrices to sampled texture colours, per pixel.
+
+    ``col`` is ``(..., 3)`` sampled colours; ``mtx`` is ``(..., 3, 3)`` the
+    interpolated per-pixel tile matrices (constant across each tile's pixels).
+
+    ``"flat"`` is the historical behaviour: the matrix applied everywhere. Its
+    defect is that a DIAGONAL palette matrix maps white texels to the tile
+    colour at full brightness, so unpainted ground renders as a saturated
+    field whose seams are the tile boundaries, and the corner pockets become
+    hard-edged colour polygons.
+
+    ``"figure"`` gates the tint by sampled luminance: full tint at or below
+    ``gate[0]``, none at or above ``gate[1]`` (smoothstep between). Near-white
+    ground then stays white on EVERY tile -- tile boundaries through ground
+    vanish and colour changes land only on figure paint, which is how Escher's
+    own coloured tilings hide their seams. ``gate[1]`` defaults to the repo's
+    WHITE_LEVEL 0.85 unpainted convention; valid because the tint runs BEFORE
+    shading, so luminance here is texture-space.
+
+    ``"ink"`` is the white-fixed-point affine ``1 - (I - M)(1 - col)``: white
+    stays white, black paint takes the tile colour. Being AFFINE in ``col`` it
+    commutes exactly with mip filtering and interpolation -- no edge halo by
+    construction -- at the cost of re-inking the figure instead of preserving
+    its luminance. Note ``M = I`` (a white palette entry) maps the whole tile
+    to white in this mode.
+    """
+    flat = torch.einsum("...ij,...j->...i", mtx, col)
+    if mode == "flat":
+        return flat
+    if mode == "figure":
+        lo, hi = float(gate[0]), float(gate[1])
+        lum = col.mean(dim=-1, keepdim=True)
+        t = ((lum - lo) / max(hi - lo, 1e-8)).clamp(0.0, 1.0)
+        w = 1.0 - t * t * (3.0 - 2.0 * t)
+        return col + w * (flat - col)
+    if mode == "ink":
+        # 1 - (I - M)(1 - col) simplified: white (col=1) is a fixed point,
+        # black maps to M @ 1 = the palette colour.
+        return col + torch.einsum("...ij,...j->...i", mtx, 1.0 - col)
+    raise ValueError(f"unknown color mode {mode!r}; expected one of {COLOR_MODES}")
 
 
 def colorize_matrices(tiler, mesh, palette) -> torch.Tensor:

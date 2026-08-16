@@ -10,6 +10,8 @@ from matplotlib import image
 
 import nvdiffrast.torch as dr
 
+from escher.rendering.palette import apply_tile_color
+
 torch.concat = torch.cat
 
 
@@ -72,6 +74,8 @@ def render_mesh_nvdiffrast(
     glctx: dr.RasterizeCudaContext = None,
     vertex_color_mtx: torch.Tensor = None,  # V,9 or B,V,9 -- per-vertex 3x3 color matrix
     shade_ambient: float = None,  # None = unlit (training); float in [0,1] = diffuse preview
+    color_mode: str = "flat",  # how the color matrix is applied (palette.COLOR_MODES)
+    color_gate: Tuple[float, float] = (0.65, 0.85),  # luminance band for "figure" mode
 ) -> torch.Tensor:  # B,H,W,4
     # Number of vertices
     vertices = vertices.to("cuda:0").float()
@@ -155,11 +159,16 @@ def render_mesh_nvdiffrast(
         # Per-vertex 3x3 color matrix, applied to the sampled color BEFORE antialiasing
         # so tile borders blend already-transformed colors. When vertices are duplicated
         # per tile (faces never index across tiles) the interpolation is exact per tile.
+        # The transfer itself (flat / luminance-gated "figure" / affine "ink") lives in
+        # palette.apply_tile_color; it runs pre-shading, so "figure" gates on
+        # texture-space luminance, and pre-antialias, on the mip-filtered sample.
         vcm = vertex_color_mtx.to("cuda:0").float()
         if vcm.ndim == 2:
             vcm = vcm.unsqueeze(0)
         mtx, _ = dr.interpolate(vcm.contiguous(), rast_out, faces)  # C,H,W,9
-        col = torch.einsum("bhwij,bhwj->bhwi", mtx.reshape(*mtx.shape[:3], 3, 3), col)
+        col = apply_tile_color(
+            col, mtx.reshape(*mtx.shape[:3], 3, 3), mode=color_mode, gate=color_gate
+        )
     if shade_ambient is not None:
         # Diffuse shading, PREVIEW ONLY (never during training -- see render_tiled_sphere).
         #

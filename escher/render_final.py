@@ -86,6 +86,8 @@ def render_turntable(
     n_frames: int = 120,
     tint: torch.Tensor | None = None,
     shade: float | None = None,
+    color_mode: str = "flat",
+    color_gate: tuple[float, float] = (0.65, 0.85),
 ) -> None:
     with torch.no_grad():
         points = escher.solve_points()
@@ -105,6 +107,8 @@ def render_turntable(
                 image_size=escher.args.RENDER_SIZE,
                 tile_color_matrices=tint,
                 shade_ambient=shade,
+                color_mode=color_mode,
+                color_gate=color_gate,
             )
             comp = (images * alpha + 1.0 * (1 - alpha)).clamp(0, 1).cpu().numpy()
             frames.extend((f * 255).astype(np.uint8) for f in comp)
@@ -127,16 +131,37 @@ def render_turntable(
     print(f"wrote {out_dir/'final.png'}")
 
 
+def apply_gutter(escher: SphereEscher) -> int:
+    """Fill the never-rasterized texels with their nearest sampled color, in place.
+
+    Returns the number of texels filled. Extracted from ``finalize`` so stills
+    scripts (the mode board / retrospective) can reuse it without the OBJ+video
+    overhead of a full finalize.
+    """
+    from escher.rendering.texture_mask import gutter_fill, uv_valid_mask
+
+    valid = uv_valid_mask(
+        escher.mesh.uv, escher.mesh.faces, int(escher.args.TEXTURE_RESOLUTION)
+    )
+    with torch.no_grad():
+        filled = gutter_fill(escher.texture.detach().cpu().numpy(), valid)
+        escher.texture.data.copy_(torch.as_tensor(filled, device=escher.texture.device))
+    return int((~valid).sum())
+
+
 def finalize(
     checkpoint: str | Path,
     *,
     tint: bool | None = None,
     colorize=None,
+    colorize_mode: str | None = None,
+    colorize_gate: tuple[float, float] | None = None,
     shade: bool = True,
     out_dir: str | Path | None = None,
     turntable: bool = True,
     gutter: bool = True,
     ema: bool = False,
+    n_frames: int = 120,
 ) -> dict:
     """Turn a finished checkpoint into deliverables; callable by a driver.
 
@@ -146,24 +171,18 @@ def finalize(
     ``gutter`` fills the never-rasterized ~60% of texels with their nearest
     sampled color before rendering, so the mip chain stops leaking the flat init
     color into minified views (measured 1.17% of sphere pixels on the shipped
-    fish). Returns artifact paths plus ``geometry_ok`` -- the 4pi certificate.
+    fish). ``colorize_mode``/``colorize_gate`` select how the palette is applied
+    (:func:`escher.rendering.palette.apply_tile_color`): None reads the config
+    (``COLORIZE_MODE``/``COLORIZE_GATE``, defaults "flat" = every prior render);
+    an explicit argument wins. Returns artifact paths plus ``geometry_ok`` --
+    the 4pi certificate.
     """
     checkpoint = Path(checkpoint)
     escher, iteration = load_run(checkpoint, ema=ema)
     print(f"loaded step {iteration} from {checkpoint}{' (EMA texture)' if ema else ''}")
 
     if gutter:
-        from escher.rendering.texture_mask import gutter_fill, uv_valid_mask
-
-        valid = uv_valid_mask(
-            escher.mesh.uv, escher.mesh.faces, int(escher.args.TEXTURE_RESOLUTION)
-        )
-        with torch.no_grad():
-            filled = gutter_fill(escher.texture.detach().cpu().numpy(), valid)
-            escher.texture.data.copy_(
-                torch.as_tensor(filled, device=escher.texture.device)
-            )
-        print(f"gutter-filled {int((~valid).sum())} unsampled texels")
+        print(f"gutter-filled {apply_gutter(escher)} unsampled texels")
 
     # Per-tile hue rotation (the alternating-color Escher look) is a render-time
     # choice. The OBJ export stays untinted either way -- one shared texture is the
@@ -208,6 +227,23 @@ def finalize(
             tint_mtx = colorize_matrices(escher.tiler, escher.mesh, pal)
             print(f"colorizing {escher.tiler.order} tiles with palette {pal}")
 
+    # How the per-tile matrices are applied per pixel: "flat" (historical),
+    # "figure" (luminance-gated -- ground stays white on every tile), or "ink"
+    # (white-fixed-point affine). Explicit argument wins over config.
+    mode = (
+        colorize_mode
+        if colorize_mode is not None
+        else str(escher.args.get("COLORIZE_MODE", "flat"))
+    )
+    gate_cfg = (
+        colorize_gate
+        if colorize_gate is not None
+        else escher.args.get("COLORIZE_GATE", [0.65, 0.85])
+    )
+    gate = (float(gate_cfg[0]), float(gate_cfg[1]))
+    if tint_mtx is not None and mode != "flat":
+        print(f"colorize mode {mode}, gate {gate}")
+
     # Diffuse shading for the video and stills. Without it the turntable is genuinely
     # ambiguous -- a rotating textured sphere carries no shape-from-shading cue, so it
     # reads as easily as the concave inside of the ball as the convex outside.
@@ -219,7 +255,15 @@ def finalize(
     out.mkdir(parents=True, exist_ok=True)
     geometry_ok = export_mesh(escher, out)
     if turntable:
-        render_turntable(escher, out, tint=tint_mtx, shade=shade_val)
+        render_turntable(
+            escher,
+            out,
+            n_frames=n_frames,
+            tint=tint_mtx,
+            shade=shade_val,
+            color_mode=mode,
+            color_gate=gate,
+        )
     return {
         "iteration": iteration,
         "geometry_ok": geometry_ok,
@@ -233,15 +277,22 @@ def finalize(
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit(
-            f"usage: {sys.argv[0]} <checkpoint.pt> [TINT=1] [COLORIZE=1] [SHADE=0] [GUTTER=0]"
+            f"usage: {sys.argv[0]} <checkpoint.pt> [TINT=1] [COLORIZE=1] "
+            "[MODE=figure|ink] [GATE=0.65,0.85] [SHADE=0] [GUTTER=0]"
         )
+    extra = sys.argv[2:]
+    mode = next((a.split("=", 1)[1] for a in extra if a.startswith("MODE=")), None)
+    gate_arg = next((a.split("=", 1)[1] for a in extra if a.startswith("GATE=")), None)
+    gate = tuple(float(v) for v in gate_arg.split(",")) if gate_arg else None
     result = finalize(
         Path(sys.argv[1]),
-        tint=True if "TINT=1" in sys.argv[2:] else None,
-        colorize=True if "COLORIZE=1" in sys.argv[2:] else None,
-        shade="SHADE=0" not in sys.argv[2:],
-        gutter="GUTTER=0" not in sys.argv[2:],
-        ema="EMA=1" in sys.argv[2:],
+        tint=True if "TINT=1" in extra else None,
+        colorize=True if "COLORIZE=1" in extra else None,
+        colorize_mode=mode,
+        colorize_gate=gate,
+        shade="SHADE=0" not in extra,
+        gutter="GUTTER=0" not in extra,
+        ema="EMA=1" in extra,
     )
     if not result["geometry_ok"]:
         raise SystemExit(3)

@@ -294,6 +294,19 @@ PALETTE_HUES_DEG: [0.0, 120.0, -120.0]
 # set. Tint takes precedence when both are armed. Render-time only, like TINT.
 COLORIZE: false
 COLORIZE_PALETTE: null
+# Per-pixel colour treatment for colorize. "flat" = the diagonal scaler applied
+# everywhere (every prior render, bit-exact default). "figure" gates the tint by
+# sampled luminance -- near-white ground stays white on EVERY tile, so tile
+# boundaries through unpainted ground vanish and the corner pockets read as
+# snow. "ink" is the white-fixed-point affine 1 - (I-M)(1-col): affine, so it
+# commutes exactly with mip filtering (no edge halo); dark paint takes the tile
+# colour. NB a white palette entry blanks its tile's figure under "ink" -- pair
+# white with "figure".
+COLORIZE_MODE: "flat"
+# Smoothstep band in texture luminance (tint runs pre-shading): full tint at or
+# below lo, none at or above hi. hi matches the WHITE_LEVEL 0.85 unpainted
+# convention (metrics_rosette); lo keeps icing/highlights fully tinted.
+COLORIZE_GATE: [0.65, 0.85]
 
 ### output
 OUTPUT_DIR: "output/sphere"
