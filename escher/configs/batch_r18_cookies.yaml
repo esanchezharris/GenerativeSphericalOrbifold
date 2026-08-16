@@ -1,0 +1,45 @@
+# Round 18d -- the icing pattern retrofitted onto the weaker subjects.
+#
+#   python -m escher.pipeline escher/configs/batch_r18_cookies.yaml
+#
+# The r18c gingerbread redo validated the mechanism: describe a COOKIE body
+# decorated with white icing marks, and the BW pipeline paints a mid-tone body
+# + white details -- which figure mode renders as tile-coloured body / white
+# icing / dark outline, the faked-reference aesthetic. The lesson generalizes:
+# the prompt's decoration placement controls luminance polarity, and polarity
+# decides where the colour lands.
+#
+# So the weak r18b subjects come back as COOKIES: snowman (the weakest --
+# half-resolved white masses), tree (spiky and busy), stocking (clean but
+# white-bodied, colour landed on the ground). Together with ginger2 they make
+# a matched cookie-ornament family; reindeer/candycane/fish stay as they are
+# (the standouts). Training stanza = the parity winner stack, unchanged.
+
+batch_name: r18_cookies
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+      COLORIZE_MODE: "figure"
+
+jobs:
+  - figure: snowman_cookie
+    prompt: "A professional cartoon of a chunky snowman cookie with a fat round body, stubby mitten arms, decorated with white icing scarf, coal eyes, a wide smile and buttons, a masterpiece"
+
+  - figure: tree_cookie
+    prompt: "A professional cartoon of a chunky Christmas tree cookie with a fat triangular body, decorated with white icing garlands, baubles and a star on top, a masterpiece"
+
+  - figure: stocking_cookie
+    prompt: "A professional cartoon of a chunky Christmas stocking cookie with a fat curved body, decorated with a white icing fur cuff and snowflake patterns, a masterpiece"
