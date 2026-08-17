@@ -32,7 +32,7 @@ from escher.rendering.camera import orbit_views
 from escher.rendering.render_sphere_nvdiffrast import build_tiled_sphere, render_tiled_sphere
 
 
-def load_run(checkpoint: Path) -> tuple[SphereEscher, int]:
+def load_run(checkpoint: Path, ema: bool = False) -> tuple[SphereEscher, int]:
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
     args = OmegaConf.create(state["config"])
 
@@ -43,12 +43,12 @@ def load_run(checkpoint: Path) -> tuple[SphereEscher, int]:
     escher.output_dir = Path(args.OUTPUT_DIR)
     escher._init_geometry()
     escher._init_parameters()
-    iteration = escher.load_checkpoint(checkpoint)
+    iteration = escher.load_checkpoint(checkpoint, ema=ema)
     return escher, iteration
 
 
-def export_mesh(escher: SphereEscher, out_dir: Path) -> None:
-    """Write the tiled sphere as OBJ + MTL + texture."""
+def export_mesh(escher: SphereEscher, out_dir: Path) -> bool:
+    """Write the tiled sphere as OBJ + MTL + texture; returns the certificate."""
     with torch.no_grad():
         points = escher.solve_points()
     sphere = build_tiled_sphere(
@@ -61,7 +61,7 @@ def export_mesh(escher: SphereEscher, out_dir: Path) -> None:
     ok, message = check_covers_sphere_once(verts, faces)
     print(f"geometry: {message}")
 
-    texture = escher.texture.detach().clamp(0, 1).cpu().numpy()
+    texture = escher.effective_texture().detach().clamp(0, 1).cpu().numpy()
     imageio.imwrite(out_dir / "tiling.png", (texture * 255).astype(np.uint8))
 
     with open(out_dir / "tiling.mtl", "w") as f:
@@ -77,6 +77,7 @@ def export_mesh(escher: SphereEscher, out_dir: Path) -> None:
         for tri in faces + 1:  # OBJ is 1-based
             f.write(f"f {tri[0]}/{tri[0]} {tri[1]}/{tri[1]} {tri[2]}/{tri[2]}\n")
     print(f"wrote {out_dir/'tiling.obj'} ({len(verts)} verts, {len(faces)} faces)")
+    return ok
 
 
 def render_turntable(
@@ -85,6 +86,8 @@ def render_turntable(
     n_frames: int = 120,
     tint: torch.Tensor | None = None,
     shade: float | None = None,
+    color_mode: str = "flat",
+    color_gate: tuple[float, float] = (0.65, 0.85),
 ) -> None:
     with torch.no_grad():
         points = escher.solve_points()
@@ -99,11 +102,13 @@ def render_turntable(
             mv = views[i : i + 4]
             images, alpha = render_tiled_sphere(
                 sphere,
-                escher.texture,
+                escher.effective_texture(),
                 mv=mv,
                 image_size=escher.args.RENDER_SIZE,
                 tile_color_matrices=tint,
                 shade_ambient=shade,
+                color_mode=color_mode,
+                color_gate=color_gate,
             )
             comp = (images * alpha + 1.0 * (1 - alpha)).clamp(0, 1).cpu().numpy()
             frames.extend((f * 255).astype(np.uint8) for f in comp)
@@ -113,7 +118,7 @@ def render_turntable(
     print(f"wrote {path} ({len(frames)} frames)")
 
     fig, axes = plt.subplots(1, 5, figsize=(19, 4.2))
-    axes[0].imshow(escher.texture.detach().clamp(0, 1).cpu().numpy())
+    axes[0].imshow(escher.effective_texture().detach().clamp(0, 1).cpu().numpy())
     axes[0].set_title("shared texture", fontsize=10)
     axes[0].set_xticks([])
     axes[0].set_yticks([])
@@ -126,36 +131,171 @@ def render_turntable(
     print(f"wrote {out_dir/'final.png'}")
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        raise SystemExit(f"usage: {sys.argv[0]} <checkpoint.pt> [TINT=1]")
-    checkpoint = Path(sys.argv[1])
-    escher, iteration = load_run(checkpoint)
-    print(f"loaded step {iteration} from {checkpoint}")
+def apply_gutter(escher: SphereEscher) -> int:
+    """Fill the never-rasterized texels with their nearest sampled color, in place.
 
-    # Per-tile hue rotation (the alternating-color Escher look) is a render-time choice:
-    # TINT=1 on the command line, or TILE_TINT: true baked into the run's config. The OBJ
-    # export stays untinted either way -- one shared texture is the point of the mesh.
-    tint = None
-    if "TINT=1" in sys.argv[2:] or escher.args.get("TILE_TINT", False):
+    Returns the number of texels filled. Extracted from ``finalize`` so stills
+    scripts (the mode board / retrospective) can reuse it without the OBJ+video
+    overhead of a full finalize.
+    """
+    from escher.rendering.texture_mask import gutter_fill, uv_valid_mask
+
+    valid = uv_valid_mask(
+        escher.mesh.uv, escher.mesh.faces, int(escher.args.TEXTURE_RESOLUTION)
+    )
+    with torch.no_grad():
+        filled = gutter_fill(escher.texture.detach().cpu().numpy(), valid)
+        escher.texture.data.copy_(torch.as_tensor(filled, device=escher.texture.device))
+    return int((~valid).sum())
+
+
+def finalize(
+    checkpoint: str | Path,
+    *,
+    tint: bool | None = None,
+    colorize=None,
+    colorize_mode: str | None = None,
+    colorize_gate: tuple[float, float] | None = None,
+    shade: bool = True,
+    out_dir: str | Path | None = None,
+    turntable: bool = True,
+    gutter: bool = True,
+    ema: bool = False,
+    n_frames: int = 120,
+) -> dict:
+    """Turn a finished checkpoint into deliverables; callable by a driver.
+
+    ``tint=None`` keeps the run config's TILE_TINT choice; ``out_dir=None`` writes
+    beside the checkpoint (historical behavior); ``turntable=False`` skips the
+    nvdiffrast video (export_mesh is CPU-safe, which is what dry runs use).
+    ``gutter`` fills the never-rasterized ~60% of texels with their nearest
+    sampled color before rendering, so the mip chain stops leaking the flat init
+    color into minified views (measured 1.17% of sphere pixels on the shipped
+    fish). ``colorize_mode``/``colorize_gate`` select how the palette is applied
+    (:func:`escher.rendering.palette.apply_tile_color`): None reads the config
+    (``COLORIZE_MODE``/``COLORIZE_GATE``, defaults "flat" = every prior render);
+    an explicit argument wins. Returns artifact paths plus ``geometry_ok`` --
+    the 4pi certificate.
+    """
+    checkpoint = Path(checkpoint)
+    escher, iteration = load_run(checkpoint, ema=ema)
+    print(f"loaded step {iteration} from {checkpoint}{' (EMA texture)' if ema else ''}")
+
+    if gutter:
+        print(f"gutter-filled {apply_gutter(escher)} unsampled texels")
+
+    # Per-tile hue rotation (the alternating-color Escher look) is a render-time
+    # choice. The OBJ export stays untinted either way -- one shared texture is the
+    # point of the mesh.
+    tint_mtx = None
+    # An EXPLICIT colorize request suppresses the config-derived tint: texture
+    # checkpoints embed TILE_TINT true (sphere_texture.yaml), which would
+    # otherwise preempt colorization with a hue rotation -- a no-op on BW
+    # textures. An explicit tint argument still wins over everything.
+    explicit_colorize = colorize is not None and colorize is not False
+    use_tint = (
+        bool(tint)
+        if tint is not None
+        else (bool(escher.args.get("TILE_TINT", False)) and not explicit_colorize)
+    )
+    if use_tint:
         from escher.rendering.palette import tile_color_matrices
 
         hues = list(escher.args.get("PALETTE_HUES_DEG", [0.0, 120.0, -120.0]))
-        tint = tile_color_matrices(escher.tiler, escher.mesh, hues)
+        tint_mtx = tile_color_matrices(escher.tiler, escher.mesh, hues)
         print(f"tinting {escher.tiler.order} tiles with hue palette {hues}")
+
+    # Colorization: per-tile diagonal RGB scaling of luminance along the same
+    # 3-coloring. The hue tint is a NO-OP on greyscale (BW) textures -- the
+    # achromatic fixed point -- so this is the color presentation for them.
+    # ``colorize`` may be None (read config COLORIZE), a bool, or a palette
+    # (sequence of RGB triples). Tint takes precedence if both are armed.
+    if tint_mtx is None:
+        from escher.rendering.palette import PASTEL_PALETTE, colorize_matrices
+
+        if colorize is None:
+            use_col = bool(escher.args.get("COLORIZE", False))
+            pal = escher.args.get("COLORIZE_PALETTE", None)
+        elif isinstance(colorize, bool):
+            use_col = colorize
+            pal = escher.args.get("COLORIZE_PALETTE", None)
+        else:
+            use_col = True
+            pal = colorize
+        if use_col:
+            pal = [list(c) for c in (pal if pal is not None else PASTEL_PALETTE)]
+            tint_mtx = colorize_matrices(escher.tiler, escher.mesh, pal)
+            print(f"colorizing {escher.tiler.order} tiles with palette {pal}")
+
+    # How the per-tile matrices are applied per pixel: "flat" (historical),
+    # "figure" (luminance-gated -- ground stays white on every tile), or "ink"
+    # (white-fixed-point affine). Explicit argument wins over config.
+    mode = (
+        colorize_mode
+        if colorize_mode is not None
+        else str(escher.args.get("COLORIZE_MODE", "flat"))
+    )
+    gate_cfg = (
+        colorize_gate
+        if colorize_gate is not None
+        else escher.args.get("COLORIZE_GATE", [0.65, 0.85])
+    )
+    gate = (float(gate_cfg[0]), float(gate_cfg[1]))
+    if tint_mtx is not None and mode != "flat":
+        print(f"colorize mode {mode}, gate {gate}")
 
     # Diffuse shading for the video and stills. Without it the turntable is genuinely
     # ambiguous -- a rotating textured sphere carries no shape-from-shading cue, so it
-    # reads as easily as the concave inside of the ball as the convex outside. SHADE=0
-    # restores the old flat look; training renders are never shaded either way.
-    shade = None
-    if "SHADE=0" not in sys.argv[2:]:
-        shade = float(escher.args.get("SHADE_AMBIENT", 0.55))
-        print(f"shading previews with ambient {shade}")
+    # reads as easily as the concave inside of the ball as the convex outside.
+    shade_val = float(escher.args.get("SHADE_AMBIENT", 0.55)) if shade else None
+    if shade_val is not None:
+        print(f"shading previews with ambient {shade_val}")
 
-    out_dir = checkpoint.parent
-    export_mesh(escher, out_dir)
-    render_turntable(escher, out_dir, tint=tint, shade=shade)
+    out = Path(out_dir) if out_dir is not None else checkpoint.parent
+    out.mkdir(parents=True, exist_ok=True)
+    geometry_ok = export_mesh(escher, out)
+    if turntable:
+        render_turntable(
+            escher,
+            out,
+            n_frames=n_frames,
+            tint=tint_mtx,
+            shade=shade_val,
+            color_mode=mode,
+            color_gate=gate,
+        )
+    return {
+        "iteration": iteration,
+        "geometry_ok": geometry_ok,
+        "obj": str(out / "tiling.obj"),
+        "tiling_png": str(out / "tiling.png"),
+        "turntable": str(out / "turntable.mp4") if turntable else None,
+        "final_png": str(out / "final.png") if turntable else None,
+    }
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        raise SystemExit(
+            f"usage: {sys.argv[0]} <checkpoint.pt> [TINT=1] [COLORIZE=1] "
+            "[MODE=figure|ink] [GATE=0.65,0.85] [SHADE=0] [GUTTER=0]"
+        )
+    extra = sys.argv[2:]
+    mode = next((a.split("=", 1)[1] for a in extra if a.startswith("MODE=")), None)
+    gate_arg = next((a.split("=", 1)[1] for a in extra if a.startswith("GATE=")), None)
+    gate = tuple(float(v) for v in gate_arg.split(",")) if gate_arg else None
+    result = finalize(
+        Path(sys.argv[1]),
+        tint=True if "TINT=1" in extra else None,
+        colorize=True if "COLORIZE=1" in extra else None,
+        colorize_mode=mode,
+        colorize_gate=gate,
+        shade="SHADE=0" not in extra,
+        gutter="GUTTER=0" not in extra,
+        ema="EMA=1" in extra,
+    )
+    if not result["geometry_ok"]:
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":

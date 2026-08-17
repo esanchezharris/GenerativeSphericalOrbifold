@@ -23,6 +23,8 @@ def test_solves_the_reference_problem(solver):
     assert result.points.shape == (g.n_verts, 3)
     assert np.allclose(np.linalg.norm(result.points, axis=1), 1.0, atol=1e-12)
     assert result.constraint_violation < 1e-6
+    # Reference-provenanced since 2026-08-12: = E_ref/2 = 7.873716855189/2 from
+    # the Octave rerun of the reference implementation (tests/golden/x_final.mat).
     assert result.energy == pytest.approx(3.9368584276, rel=1e-8)
 
 

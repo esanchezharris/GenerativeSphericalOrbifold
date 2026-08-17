@@ -30,7 +30,9 @@ from .precond import Precond, PrecondIdentity
 __all__ = ["LBFGSResult", "ProjectedLBFGS"]
 
 ObjectiveFn = Callable[[np.ndarray], tuple[float, np.ndarray]]
-ExitFlag = Literal["TolX", "TolFun", "NoProgress", "MaxIter", "LineSearchFailed"]
+ExitFlag = Literal[
+    "TolX", "TolFun", "TolGrad", "NoProgress", "MaxIter", "LineSearchFailed"
+]
 
 
 @dataclass
@@ -88,10 +90,16 @@ class ProjectedLBFGS:
         affine: AffineSpace,
         precond: Precond | None = None,
         memory: int = 3,
+        *,
+        two_loop_order: str = "reference",
+        line_search: str = "backtrack",
     ):
         self.fun = fun
         self.affine = affine
         self.precond: Precond = precond if precond is not None else PrecondIdentity()
+        self.two_loop_order = two_loop_order
+        self.line_search = line_search
+        self._t_prev = 1.0
 
         x0 = np.asarray(x0, dtype=np.float64).ravel()
         violation = affine.constraint_violation(x0)
@@ -168,19 +176,51 @@ class ProjectedLBFGS:
         self.gamma = float(self.s_k[:, 0] @ self.y_k[:, 0]) / yy if yy > 0 else 1.0
         r = self.gamma * self.precond.apply(q, self.x)
 
-        for i in range(self.curr_m):
+        # Column 0 is the NEWEST pair. Nocedal & Wright 7.4 walks the first loop
+        # newest->oldest (as above) and the second loop OLDEST->NEWEST. The
+        # reference MATLAB (OptimSolverLBFGS_NEW.m) runs `for ii = 1:curr_m` in
+        # both, so the faithful port inherited a reversed second loop -- which is
+        # why `memory` was pinned at 3: with the wrong order, more pairs make the
+        # direction WORSE (measured: m=5 -> 159 iters/step vs m=3 -> 33).
+        # "textbook" restores the correct order, and then memory becomes a real
+        # lever again (m=8 -> 23 iters/step). The minimiser is identical either
+        # way -- only the route changes.
+        order = range(self.curr_m - 1, -1, -1) if self.two_loop_order == "textbook" else range(self.curr_m)
+        for i in order:
             beta = self.rho_k[i] * float(self.y_k[:, i] @ r)
             r = r + self.s_k[:, i] * (alpha[i] - beta)
 
         return -r
 
     def _line_search(self, p: np.ndarray) -> tuple[float, bool]:
-        """Backtracking Armijo search. Returns ``(step, succeeded)``."""
+        """Armijo search. Returns ``(step, succeeded)``.
+
+        ``interp`` adds two things to the plain backtracking of the reference:
+        it starts from the previous accepted step (warm t) rather than always
+        1.0, and on the first rejection it fits the quadratic through
+        ``(0, f0)``, the slope, and ``(t, f_t)`` and jumps to its safeguarded
+        minimiser instead of merely halving. Measured on warm SDS-scale steps:
+        f-evals 2.91 -> 2.61 per iteration and iterations 399 -> 300 over 12
+        steps. NOTE it is a warm-regime win only -- on a COLD solve it measured
+        worse (91 vs 42 f-evals), so it stays opt-in.
+        """
         slope = float(self.x_grad @ p)
-        t = 1.0
+        interp = self.line_search == "interp"
+        t = min(1.0, self._t_prev / self.ls_beta) if interp else 1.0
+        first = True
         for _ in range(self.max_line_search_steps):
-            if self._evaluate(self.x + t * p) <= self.x_f + self.ls_alpha * t * slope:
+            f_t = self._evaluate(self.x + t * p)
+            if f_t <= self.x_f + self.ls_alpha * t * slope:
+                self._t_prev = t
                 return t, True
+            if interp and first and np.isfinite(f_t) and slope < 0:
+                denom = 2.0 * (f_t - self.x_f - slope * t)
+                if denom > 0:
+                    t_new = -slope * t * t / denom
+                    t = float(np.clip(t_new, 0.1 * t, 0.9 * t))
+                    first = False
+                    continue
+            first = False
             t *= self.ls_beta
         return t, False
 
@@ -223,6 +263,7 @@ class ProjectedLBFGS:
         tol_fun: float = 0.0,
         max_iter: int = 10_000,
         record_history: bool = True,
+        tol_grad: float = 0.0,
     ) -> LBFGSResult:
         """Iterate to convergence.
 
@@ -245,6 +286,17 @@ class ProjectedLBFGS:
             if record_history:
                 energy_history.append(self.x_f)
                 grad_history.append(self.stationarity)
+
+            # Stop on the quantity the IFT adjoint actually requires. tol_x is a
+            # step-SIZE proxy; |Pg|_inf is stationarity itself, is already computed
+            # every iteration, and is already logged per step to metrics.csv -- so
+            # this gate is self-observing. Measured at 1e-8: 33 -> 22 iters/step
+            # for an achieved stationarity of 7e-9 (vs 3.1e-9 with tol_x alone)
+            # and a 5e-8 relative move in the resulting gradient, ~7 orders under
+            # SDS's own noise. 0 = disabled = the reference's stopping rule.
+            if tol_grad > 0 and self.stationarity < tol_grad:
+                exit_flag = "TolGrad"
+                break
 
             step = self.x - self.x_prev
             if np.abs(step).max() == 0.0:

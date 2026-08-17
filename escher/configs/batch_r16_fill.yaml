@@ -1,0 +1,89 @@
+# Round 16 -- FILL THE TILE: kill the rosettes at the rotation centres.
+#
+#   python -m escher.pipeline escher/configs/batch_r16_fill.yaml
+#
+# THE ARTIFACT: at each of the 6 four-fold and 8 three-fold rotation centres,
+# several tile copies pinwheel around one vertex. The shared atlas holds a flat
+# UNPAINTED patch at those UV corners (stocking: mean luminance 1.0000, std
+# EXACTLY 0.0000 in a 32-texel disc; gingerbread 0.94-0.98 against an interior
+# null of 0.353 +- 0.205), so each copy contributes a wedge of bare white and
+# the per-tile colourisation -- a diagonal multiply, so white renders at the
+# palette colour at FULL brightness -- turns it into a hard-edged multicoloured
+# square (4-fold) or 6-wedge rosette (3-fold).
+#
+# WHY THE LIMBS DO NOT JUST GROW INTO IT: nothing ever asked them to.
+# ISOLATED_TILE_FRACTION 1.0 means every SDS view is one tile, cropped,
+# composited on white, under a prompt ending "on a white background" -- a figure
+# that stops short of the corner with white around it scores PERFECTLY. The
+# inter-figure region was never in the loss. It is NOT a geometry gap: carved
+# solid angle near the corners is within +-25% of the undeformed kite and the
+# certificate is exactly 4pi.
+#
+# EXISTENCE PROOF: r13 reindeer has a 0.3%-white atlas and rosette radius 0.00
+# at every corner. Gingerbread is 34% white with 21.25 deg at its worst corner.
+#
+# Primary yardstick: escher/metrics_rosette.py -- per corner, the largest
+# geodesic radius whose solid-angle-weighted mean atlas luminance stays >= 0.85.
+# Goal: -> 0 deg, with murk NOT regressing (that is the round-12 win) and
+# articulation (boundary_ratio) holding.
+#
+# MEASURED CONSTRAINT on ISOLATED_NEIGHBOURS (sweep + a 250-step smoke): the
+# centre tile keeps 40% of the frame at every neighbour count, but background
+# falls 60/21/11/5% at 0/2/3/6 neighbours -- and background is where the outline
+# gradients live. At 6 the perimeter stalled at 1.038 vs the control's ~1.29.
+# So this batch sweeps 2 and 3 only; 6 is known-broken and not repeated.
+
+batch_name: r16_fill
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a gingerbread man, a masterpiece, on a white background"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml, configs/sphere_texture_octa_clean.yaml, configs/sphere_texture_octa_fast.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+
+jobs:
+  - figure: ctrl                 # today's rosettes, under current code
+
+  # --- whole-sphere context: the rosettes are visible, but the figure is small
+  - figure: tiled_75
+    stages:
+      texture:
+        ISOLATED_TILE_FRACTION: 0.75
+
+  - figure: tiled_50
+    stages:
+      texture:
+        ISOLATED_TILE_FRACTION: 0.50
+
+  # --- neighbour ring: figure stays frame-filling, corners gain real context
+  - figure: nbr2
+    stages:
+      texture:
+        ISOLATED_NEIGHBOURS: 2
+
+  - figure: nbr3                 # more context, less background -- where is the edge?
+    stages:
+      texture:
+        ISOLATED_NEIGHBOURS: 3
+
+  - figure: nbr2_tiled           # do the two levers compose
+    stages:
+      texture:
+        ISOLATED_NEIGHBOURS: 2
+        ISOLATED_TILE_FRACTION: 0.75
+
+  # --- the free lever: ask the figure for limbs that reach (round-6 precedent,
+  # chunky phrasing took gingerbread 0.788 -> 0.830 and moved where residual went)
+  - figure: prompt_wide
+    prompt: "A professional cartoon of a gingerbread man with long arms and legs stretched wide, a masterpiece, on a white background"

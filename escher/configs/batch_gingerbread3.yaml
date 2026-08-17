@@ -1,0 +1,30 @@
+# Gingerbread phase 2b: phase 2 (lab-winner template) + the WS3 chroma-floor
+# fill loss armed. Phases 1-2 both painted an achromatic gray "tray" between
+# the cookies -- SDS insists gingerbread men sit on baking sheets, and gray is
+# a fixed point of the hue tint (why it reads as one continuous ground). The
+# chroma floor charges for exactly those texels. Launch AFTER gingerbread2.
+#
+#   python -m escher.pipeline escher/configs/batch_gingerbread3.yaml
+
+batch_name: gingerbread3
+runs_root: runs
+
+jobs:
+  - figure: gingerbread_chroma
+    orbifold: [2, 3, 4]
+    texture_seeds: [0]
+    reuse_carve: runs/gingerbread/gingerbread_img/carve_s0/checkpoint.pt
+    color_target: runs/gingerbread/gingerbread_img/targets/color.png
+    prompt: "A professional cartoon of a cute gingerbread man, a masterpiece"
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml]
+        KITE_N: 40
+        TEXTURE_FILL_WEIGHT: 25.0
+        TEXTURE_FILL_CHROMA_MIN: 0.15
+        TORCH_COMPILE: true
+        TIMING: true
+        KEEP_CHECKPOINTS: 5
+        TEXTURE_EMA_DECAY: 0.998
+      render:
+        TINT: true

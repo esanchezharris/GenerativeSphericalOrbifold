@@ -1,0 +1,83 @@
+# Round 11 -- THE CHRISTMAS SWEEP: the 6 pre-registered levers on the strict-
+# parity recipe (gingerbread man = lever base AND ornament arm), the 14k-step
+# budget question, and the ornament subject candidates. All arms from identity
+# starts -- SDS sculpts everything; zero diffusion-sampled targets.
+#
+#   python -m escher.pipeline escher/configs/batch_r11_xmas.yaml
+#
+# Prereqs (CPU, seconds; escher/sanity_checks/make_identity_checkpoint.py):
+#   runs/r10_parity/prep/carve_identity40/checkpoint.pt   (KITE_N 40, W=0)
+#   runs/r11/prep/identity56/checkpoint.pt                (KITE_N 56, W=0)
+#   runs/r11/prep/identity40_randn/checkpoint.pt          (KITE_N 40, W~randn, SEED 0)
+#
+# The 6th lever (stationarity gate) is a free observer column in EVERY arm
+# (metrics.csv "stationarity"); a gating arm runs only if the control's
+# distribution shows unconverged solves. The step-count question: the round-10
+# fish articulated to 1.37x by step ~1500 then plateaued (score equilibrium);
+# longrun_14k tests that directly, prediction on record: shape ~flat, texture
+# may sharpen. Renders: greyscale + red/green/gold colorization (the hue tint
+# is a no-op on BW textures).
+
+batch_name: r11_xmas
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a gingerbread man, a masterpiece"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+
+jobs:
+  - figure: ctrl_ginger            # lever baseline AND the gingerbread ornament arm
+
+  - figure: lever_kite56           # articulation capacity: 224 boundary verts
+    reuse_carve: runs/r11/prep/identity56/checkpoint.pt
+    stages:
+      texture:
+        KITE_N: 56               # must match the identity checkpoint
+
+  - figure: lever_randn            # upstream's true init -- a different basin
+    reuse_carve: runs/r11/prep/identity40_randn/checkpoint.pt
+
+  - figure: lever_dist20           # bigger tile pre-crop -> stronger boundary signal
+    stages:
+      texture:
+        ISOLATED_DISTANCE: 2.0
+
+  - figure: lever_drop75           # more pure-outline passes
+    stages:
+      texture:
+        TEXTURE_DROP_PROB: 75
+
+  - figure: lever_template         # the paper-page prompt template
+    prompt: "A beautiful illustration of a gingerbread man, a masterpiece"
+
+  - figure: longrun_14k            # the step-budget question, empirically
+    stages:
+      texture:
+        N_STEPS: 14000           # StepLR fires at 11200
+
+  - figure: xmas_tree
+    prompt: "A professional cartoon of a Christmas tree, a masterpiece"
+
+  - figure: xmas_snowman
+    prompt: "A professional cartoon of a snowman, a masterpiece"
+
+  - figure: xmas_stocking
+    prompt: "A professional cartoon of a Christmas stocking, a masterpiece"
+
+  - figure: xmas_reindeer          # hard mode: limbed + antlered
+    prompt: "A professional cartoon of a reindeer, a masterpiece"
+
+  - figure: xmas_candycane         # hard mode: thin / elongated
+    prompt: "A professional cartoon of a candy cane, a masterpiece"

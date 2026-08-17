@@ -1,0 +1,13 @@
+# MIDDLE-DOSE regularizer follow-up -- overlay listed AFTER
+# sphere_texture_octa_gemfull.yaml (round-5 batch verdict, 2026-08-10):
+#
+#   zero regs   (gemfull_img_s0/s1): perim 1.155-1.162, spread 51-92, 60 min
+#   10% dose    (gemfull_guard_s0):  perim 1.086 (smoothed), spread 3.7, but the
+#     solver ground at ~2,500 L-BFGS iters/step (5 h/run) and the prettiest
+#     per-fish rendering came with feathered filler between the bodies
+#
+# This 2% dose asks for guard's clean face geometry WITHOUT its outline
+# smoothing or solver pathology. Judged against gemfull_img_s0 on the same
+# carve, anchor and seed.
+EQUAL_AREA_WEIGHT: 10.0
+AREA_TAIL_WEIGHT: 16.0

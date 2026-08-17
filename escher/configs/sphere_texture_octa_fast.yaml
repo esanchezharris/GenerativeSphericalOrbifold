@@ -1,0 +1,49 @@
+# THE FAST STACK (round 14) -- overlay, listed AFTER sphere_texture_octa_clean.yaml:
+#
+#   python escher/main_sphere.py "CONF_FILE=[configs/sphere_texture.yaml,configs/sphere_texture_octa.yaml,configs/sphere_texture_octa_gemfull.yaml,configs/sphere_texture_octa_parity.yaml,configs/sphere_texture_octa_clean.yaml,configs/sphere_texture_octa_fast.yaml]" ...
+#
+# 2.7x faster than the clean stack AND at double texture resolution, measured
+# over 7 full 7000-step arms (batch_r14_accel.yaml):
+#
+#   arm          ms/step   murk    perim   folds
+#   ctrl           599     0.352   1.726     0
+#   solv_full      489     0.152   1.696     0   <- answer-preserving control
+#   enc_taesd      348     0.297   1.720     0
+#   enc_taesd s1   347     0.281   1.820     0
+#   enc_vaemean    614     0.068   1.610     0
+#   full_512       223     0.232   1.715     0   <- THIS STACK
+#   full_512 s1    227     0.174   1.774     0
+#
+# Phase breakdown vs the clean stack: solve 132 -> 30, sds 239 -> 139,
+# backward 215 -> 50, total 602 -> 222 ms. 7000 steps: 70 -> 26 min.
+# Peak VRAM 7.6 -> 4.4 GiB even at TEXTURE_RESOLUTION 512.
+#
+# WHY THE QUALITY NUMBERS ABOVE MEAN "NO COST": solv_full changes only HOW the
+# solve is computed -- it is pinned against the reference MATLAB solution to
+# 1e-8 against a 1e-6 gate -- so its 0.152-vs-0.352 distance from ctrl is pure
+# CUDA/SDS chaos, not an effect. Independently, r12's abl_white_bg is the same
+# config+seed+carve as ctrl here and scored 0.070 vs 0.352. The murk metric
+# therefore has a ~0.3 run-to-run range at FIXED config: it ranks levers within
+# one batch, it does not rank individual runs. Every TAESD arm lands inside
+# that band, and articulation (the thing that actually reads as the figure)
+# never leaves 1.61-1.82 in any arm.
+#
+# One systematic, reproducible-across-seeds TAESD side effect: its noise
+# residual is LOWER (0.12 vs ctrl 0.19) and its textures are slightly darker
+# (mean luminance 0.34 vs 0.40). The lower noise is the predicted high-frequency
+# lossiness, showing up mildly in our favour.
+
+SDS_ENCODER: "taesd"          # the encoder was 48% of wall clock (only network
+                              # in the backward, 2.1x the UNet it feeds)
+TEXTURE_RESOLUTION: 512       # affordable now: TAESD freed ~3 GiB. Costs VRAM,
+                              # not time -- the hot path never touches it.
+
+# Solver: geometry 358 -> 58 ms. Provably answer-preserving; see sphere.yaml for
+# the per-knob measurements and tests/test_solver_accel.py for the parity gates.
+SOLVER_CACHE_AFFINE: true
+SOLVER_PRECOND_EVERY: 5
+SOLVER_TWO_LOOP_ORDER: "textbook"   # fixes the reference's reversed second loop
+SOLVER_MEMORY: 8                    # only useful once the order is correct
+SOLVER_TOL_GRAD: 1.0e-8
+ADJOINT_REUSE_FACTOR: true
+# NOT enabled: SOLVER_LINE_SEARCH "interp" measured SLOWER here (81 vs 78 ms).

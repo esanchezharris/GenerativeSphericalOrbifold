@@ -163,7 +163,13 @@ def test_projected_gradient_converges_to_zero(spherical_problem):
 
 
 def test_converged_energy_is_stable(spherical_problem):
-    """Pin the converged value so any future change to the energy shows up here."""
+    """Pin the converged value so any future change to the energy shows up here.
+
+    Since 2026-08-12 this pin is reference-provenanced, not self-generated: the
+    Octave rerun of the reference implementation converged to E = 7.873716855189
+    counting each edge twice, i.e. exactly 2x this value. See
+    tests/test_golden_solution.py and tests/golden/reference_rerun/.
+    """
     g, fun, affine = spherical_problem
     result = ProjectedLBFGS(
         fun, g.x0, affine, PrecondFixed(g.wmat, affine), memory=3

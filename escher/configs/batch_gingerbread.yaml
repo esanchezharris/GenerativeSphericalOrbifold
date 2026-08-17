@@ -1,0 +1,39 @@
+# The round-5 showcase: gingerbread man, end to end, on the winning recipe --
+# KITE_N-40 carve + image anchor + zero-reg full-run joint (gemfull overlay).
+# The texture PROMPT below is finalized from the planar prompt-lab verdict.
+#
+#   python -m escher.pipeline escher/configs/batch_gingerbread.yaml
+
+batch_name: gingerbread
+runs_root: runs
+
+jobs:
+  - figure: gingerbread_img
+    orbifold: [2, 3, 4]
+    texture_seeds: [0]
+    color_target: auto
+    prompt: "a cute gingerbread man with white icing and candy buttons, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+    silhouette_prompt: "a plain solid black silhouette of a gingerbread man, thick rounded limbs, white background, minimal flat logo, centered, full body"
+    seeds: [0]
+    stages:
+      target:
+        N: 32
+        STEPS: 30
+      screen:
+        # Screen at KITE_N 20 (3-4x cheaper); the winning target transfers.
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml]
+        TARGET_SWEEP_STEPS: 150
+        KEEP_CHECKPOINTS: 1
+      carve:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml, configs/sphere_shape_weights_fish2_hi.yaml]
+        SHAPE_STEPS: 1500
+        KEEP_CHECKPOINTS: 2
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml]
+        KITE_N: 40                # must match the carve
+        TORCH_COMPILE: true
+        TIMING: true
+        KEEP_CHECKPOINTS: 5
+        TEXTURE_EMA_DECAY: 0.998
+      render:
+        TINT: true

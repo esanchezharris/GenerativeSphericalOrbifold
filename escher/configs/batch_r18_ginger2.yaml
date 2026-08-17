@@ -1,0 +1,52 @@
+# Round 18c -- the gingerbread man, redone against the user's faked reference
+# (assets/gingerbread-man.png), on the winner (parity) stack.
+#
+#   python -m escher.pipeline escher/configs/batch_r18_ginger2.yaml
+#
+# WHAT THE REFERENCE SHOWS (and the r18b parity ginger got wrong):
+#   1. ZERO background -- the men tile wall-to-wall, body against body.
+#      (r18b: large dark ground between figures.)
+#   2. The BODY carries the colour; white is only the ICING -- smile, eyes,
+#      buttons, wavy cuffs drawn ON the coloured body. (r18b: inverted --
+#      white body, coloured ground.)
+#   3. Chunky anatomy: fat body, thick stubby limbs, MITTEN hands with no
+#      fingers -- nothing thin enough to smudge. (r18b: smudged finger blobs.)
+#
+# HOW THAT MAPS TO THE BW PIPELINE: a texture with mid-grey body + white
+# icing marks + dark outline renders, under COLORIZE_MODE "figure", as
+# tile-coloured body / white icing / dark outline -- the reference aesthetic
+# with the 3-colour alternation for free. So the prompt asks for exactly that
+# look; the chunky/limb phrasing is the proven densifier (R6 chunky: figures
+# pressed body-to-body; R16 wide limbs: cone2a 31.75 -> 4.75).
+#
+# Two arms: the prompt lever alone, and + TEXTURE_RESOLUTION 512 (double
+# texel density where the hands smudged; render/VAE cost unchanged -- texture
+# res is not the hot path).
+
+batch_name: r18_ginger2
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a chunky gingerbread man with a fat round body, thick stubby arms and legs, mitten hands, decorated with white icing smile, eyes, buttons and wavy cuffs, a masterpiece"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+      COLORIZE_MODE: "figure"
+
+jobs:
+  - figure: ginger2_icing
+
+  - figure: ginger2_icing_512
+    stages:
+      texture:
+        TEXTURE_RESOLUTION: 512

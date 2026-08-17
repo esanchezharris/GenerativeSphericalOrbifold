@@ -12,7 +12,10 @@ import torch
 
 from escher.OTE.tilings_sphere.boundary_explicit import BoundaryExplicitDihedral
 from escher.rendering.palette import (
+    XMAS_WHITE_PALETTE,
+    apply_tile_color,
     assign_palette_indices,
+    cone_pinwheels,
     hue_rotation_matrix,
     tile_adjacency,
     tile_color_matrices,
@@ -97,6 +100,46 @@ def test_octahedral_tiling_is_three_colorable():
         assert colors[a] != colors[b]
 
 
+def test_octahedral_pinwheels_are_the_fourteen_rotation_centres():
+    """(2,3,4): 6 four-fold centres carry 4 wedges, 8 three-fold centres carry 6
+    (alternating cone2a/cone2b corners of six tiles). The 12 two-fold centres carry
+    only 2 and must be excluded -- the figure paints straight through them."""
+    from escher.OTE.tilings_sphere.boundary_explicit_triple import BoundaryExplicitTriple
+
+    orb = BoundaryExplicitTriple.from_resolution((2, 3, 4), n=6)
+    wheels = cone_pinwheels(orb.tiler(), orb.mesh)
+    assert sorted(len(w) for w in wheels) == [4] * 6 + [6] * 8
+
+
+@pytest.mark.parametrize("n_colors,expected", [(3, [8, 8, 8]), (4, [6, 6, 6, 6])])
+def test_octahedral_coloring_is_balanced_and_proper(n_colors, expected):
+    """First-found proper colorings shipped [9, 10, 5] -- and at n=4 the fourth
+    color went entirely unused. Balance is what makes a 4-color palette real."""
+    from escher.OTE.tilings_sphere.boundary_explicit_triple import BoundaryExplicitTriple
+
+    orb = BoundaryExplicitTriple.from_resolution((2, 3, 4), n=6)
+    tiler = orb.tiler()
+    colors = assign_palette_indices(tiler, orb.mesh, n_colors=n_colors)
+    assert sorted(np.bincount(colors, minlength=n_colors).tolist()) == sorted(expected)
+    for a, b in tile_adjacency(tiler, orb.mesh):
+        assert colors[a] != colors[b]
+
+
+def test_four_colors_fully_diversify_every_rotation_centre():
+    """Measured optimum, pinned: with four colors the hill-climb reaches full
+    palette diversity at ALL 14 rotation centres -- all 4 colors distinct around
+    every 4-fold centre and all 4 present around every 6-wedge centre. This is
+    the render-side answer to the meeting-point artifact: no color ever repeats
+    where tiles pinwheel."""
+    from escher.OTE.tilings_sphere.boundary_explicit_triple import BoundaryExplicitTriple
+
+    orb = BoundaryExplicitTriple.from_resolution((2, 3, 4), n=6)
+    tiler = orb.tiler()
+    colors = assign_palette_indices(tiler, orb.mesh, n_colors=4)
+    for wheel in cone_pinwheels(tiler, orb.mesh):
+        assert len({int(colors[t]) for t in wheel}) == 4, (wheel, colors[wheel])
+
+
 def test_tile_color_matrices_draws_from_the_palette():
     orb = BoundaryExplicitDihedral.from_resolution(k=4, n_theta=6, n_phi=5)
     hues = [0.0, 120.0, -120.0]
@@ -105,6 +148,91 @@ def test_tile_color_matrices_draws_from_the_palette():
     palette = torch.stack([hue_rotation_matrix(h) for h in hues])
     for m in mats:
         assert any(torch.allclose(m, p, atol=1e-6) for p in palette)
+
+
+# --------------------------------------------------- per-pixel colour transfer modes
+def _pixels(seed=0, shape=(2, 4, 4)):
+    """Random sampled colours + per-pixel diagonal palette matrices."""
+    g = torch.Generator().manual_seed(seed)
+    col = torch.rand(*shape, 3, generator=g)
+    p = torch.rand(*shape, 3, generator=g) * 0.7 + 0.3
+    mtx = torch.diag_embed(p)
+    return col, mtx
+
+
+def test_flat_mode_is_bitwise_the_raw_einsum():
+    col, mtx = _pixels()
+    out = apply_tile_color(col, mtx, mode="flat")
+    assert torch.equal(out, torch.einsum("...ij,...j->...i", mtx, col))
+
+
+def test_figure_mode_keeps_white_ground_white():
+    """The point of the mode: near-white texels stay white under ANY tile colour,
+    so tile boundaries through unpainted ground vanish."""
+    _, mtx = _pixels()
+    white = torch.ones(*mtx.shape[:-2], 3)
+    out = apply_tile_color(white, mtx, mode="figure", gate=(0.65, 0.85))
+    assert torch.allclose(out, white)
+
+
+def test_figure_mode_fully_tints_dark_paint():
+    col, mtx = _pixels()
+    dark = col * 0.5  # luminance <= 0.5 < lo=0.65 everywhere
+    out = apply_tile_color(dark, mtx, mode="figure", gate=(0.65, 0.85))
+    assert torch.allclose(out, apply_tile_color(dark, mtx, mode="flat"))
+
+
+def test_figure_mode_band_midpoint_is_the_exact_smoothstep_blend():
+    _, mtx = _pixels(shape=(1, 1, 1))
+    lo, hi = 0.6, 0.8
+    col = torch.full((1, 1, 1, 3), (lo + hi) / 2)  # t=0.5 -> smoothstep 0.5 -> w=0.5
+    out = apply_tile_color(col, mtx, mode="figure", gate=(lo, hi))
+    flat = apply_tile_color(col, mtx, mode="flat")
+    assert torch.allclose(out, 0.5 * col + 0.5 * flat, atol=1e-6)
+
+
+def test_ink_mode_fixes_white_and_inks_black():
+    _, mtx = _pixels()
+    white = torch.ones(*mtx.shape[:-2], 3)
+    black = torch.zeros_like(white)
+    assert torch.allclose(apply_tile_color(white, mtx, mode="ink"), white)
+    # black maps to M @ 1 = the palette colour itself
+    assert torch.allclose(
+        apply_tile_color(black, mtx, mode="ink"), mtx.diagonal(dim1=-2, dim2=-1)
+    )
+
+
+def test_ink_mode_is_affine_so_it_commutes_with_filtering():
+    """apply(mix(a,b)) == mix(apply(a), apply(b)) -- the property that makes ink
+    mode halo-free: mip/bilinear filtering and the colour map commute exactly."""
+    a, mtx = _pixels(seed=1)
+    b, _ = _pixels(seed=2)
+    for lam in (0.25, 0.5, 0.9):
+        mixed = apply_tile_color(lam * a + (1 - lam) * b, mtx, mode="ink")
+        applied = lam * apply_tile_color(a, mtx, mode="ink") + (1 - lam) * apply_tile_color(
+            b, mtx, mode="ink"
+        )
+        assert torch.allclose(mixed, applied, atol=1e-6)
+
+
+def test_white_palette_entry_is_identity_except_in_ink():
+    """[1,1,1] = identity matrix: flat and figure pass the figure through
+    (an iced-white tile), but ink BLANKS the tile (1 - (I-I)(1-c) = 1) -- the
+    documented caveat: pair the white entry with figure mode."""
+    col, _ = _pixels()
+    eye = torch.eye(3).expand(*col.shape[:-1], 3, 3)
+    assert torch.allclose(apply_tile_color(col, eye, mode="flat"), col)
+    assert torch.allclose(apply_tile_color(col, eye, mode="figure"), col)
+    assert torch.allclose(
+        apply_tile_color(col, eye, mode="ink"), torch.ones_like(col)
+    )
+    assert XMAS_WHITE_PALETTE[3] == [1.0, 1.0, 1.0]
+
+
+def test_unknown_mode_raises():
+    col, mtx = _pixels(shape=(1, 1, 1))
+    with pytest.raises(ValueError, match="unknown color mode"):
+        apply_tile_color(col, mtx, mode="glow")
 
 
 # ------------------------------------------------------- renderer attribute contract

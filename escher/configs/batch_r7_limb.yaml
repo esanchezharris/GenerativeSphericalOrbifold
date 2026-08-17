@@ -1,0 +1,28 @@
+# Round-7 recovery arm: the limb-weighted carve's flat texture. The in-batch
+# fish_limbcarve arm failed at its screen (assets/targets/fish64 carries only
+# the committed WINNER mask, no candidate sheet), so the carve runs standalone
+# against the same target carve_hi used (runs/acceptance_fish/fish_run1/
+# target.npy, LIMB_WEIGHT_MAX 5, CPU lane) -- a cleaner same-target A/B.
+# Launch AFTER batch_r7_flat completes and the carve exists.
+#
+#   python -m escher.pipeline escher/configs/batch_r7_limb.yaml
+
+batch_name: r7_limb
+runs_root: runs
+
+jobs:
+  - figure: flat_fish_limb
+    orbifold: [2, 3, 4]
+    texture_seeds: [0]
+    reuse_carve: runs/r7_flat/prep/carve_limb/checkpoint.pt
+    color_target: runs/r7_anchors/fish/color.png
+    prompt: "A professional cartoon of a fish, a masterpiece"
+    stages:
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_flat.yaml]
+        GUIDANCE_SCALE: 100.0
+        TORCH_COMPILE: true
+        TIMING: true
+        KEEP_CHECKPOINTS: 5
+      render:
+        TINT: true

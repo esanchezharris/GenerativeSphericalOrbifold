@@ -10,6 +10,8 @@ from matplotlib import image
 
 import nvdiffrast.torch as dr
 
+from escher.rendering.palette import apply_tile_color
+
 torch.concat = torch.cat
 
 
@@ -26,6 +28,40 @@ def _warmup(glctx):
     dr.rasterize(glctx, pos, tri, resolution=[256, 256])
 
 
+# Created lazily and cached, mirroring render_tiling_core.py. The sphere training path
+# never passed a context in, so a fresh RasterizeGLContext was created AND warmed on
+# every render call -- once per SDS step, twice more per snapshot, 30 times in a
+# turntable. Contexts are designed for reuse; every other renderer entry point in the
+# repo caches one. Per-process on purpose: the spawn-based sweep workers re-import this
+# module and each lazily builds its own.
+_default_ctx = None
+_default_kind = "gl"
+
+
+def set_default_context_kind(kind: str) -> None:
+    """Select the default rasterizer: ``gl`` (bit-identical to all prior runs) or
+    ``cuda``. The two are different rasterizer implementations -- edge pixels can
+    differ at exact coverage ties -- so ``cuda`` is an opt-in A/B, never a silent
+    default flip."""
+    global _default_ctx, _default_kind
+    if kind not in ("gl", "cuda"):
+        raise ValueError(f"RASTER_CONTEXT must be 'gl' or 'cuda', got {kind!r}")
+    if kind != _default_kind:
+        _default_kind = kind
+        _default_ctx = None
+
+
+def _get_default_context():
+    global _default_ctx
+    if _default_ctx is None:
+        if _default_kind == "cuda":
+            _default_ctx = dr.RasterizeCudaContext()
+        else:
+            _default_ctx = dr.RasterizeGLContext()
+            _warmup(_default_ctx)
+    return _default_ctx
+
+
 def render_mesh_nvdiffrast(
     vertices: torch.Tensor,  # B,V,3,
     faces: torch.Tensor,  # V,3,
@@ -38,6 +74,8 @@ def render_mesh_nvdiffrast(
     glctx: dr.RasterizeCudaContext = None,
     vertex_color_mtx: torch.Tensor = None,  # V,9 or B,V,9 -- per-vertex 3x3 color matrix
     shade_ambient: float = None,  # None = unlit (training); float in [0,1] = diffuse preview
+    color_mode: str = "flat",  # how the color matrix is applied (palette.COLOR_MODES)
+    color_gate: Tuple[float, float] = (0.65, 0.85),  # luminance band for "figure" mode
 ) -> torch.Tensor:  # B,H,W,4
     # Number of vertices
     vertices = vertices.to("cuda:0").float()
@@ -102,11 +140,9 @@ def render_mesh_nvdiffrast(
     # or
     # col = torch.flip(col, 1)
 
-    # Check if gltctx is provided, otherwise create a new one
+    # Use the caller's context when given, else the cached per-process default.
     if glctx is None:
-        glctx = dr.RasterizeGLContext()
-        # glctx = dr.RasterizeCudaContext(torch.device("cuda"))
-        _warmup(glctx)
+        glctx = _get_default_context()
 
     # Rasterize data
     rast_out, rast_out_db = dr.rasterize(glctx, vertices_clip, faces, resolution=image_size, grad_db=True)  # C,H,W,4
@@ -123,11 +159,16 @@ def render_mesh_nvdiffrast(
         # Per-vertex 3x3 color matrix, applied to the sampled color BEFORE antialiasing
         # so tile borders blend already-transformed colors. When vertices are duplicated
         # per tile (faces never index across tiles) the interpolation is exact per tile.
+        # The transfer itself (flat / luminance-gated "figure" / affine "ink") lives in
+        # palette.apply_tile_color; it runs pre-shading, so "figure" gates on
+        # texture-space luminance, and pre-antialias, on the mip-filtered sample.
         vcm = vertex_color_mtx.to("cuda:0").float()
         if vcm.ndim == 2:
             vcm = vcm.unsqueeze(0)
         mtx, _ = dr.interpolate(vcm.contiguous(), rast_out, faces)  # C,H,W,9
-        col = torch.einsum("bhwij,bhwj->bhwi", mtx.reshape(*mtx.shape[:3], 3, 3), col)
+        col = apply_tile_color(
+            col, mtx.reshape(*mtx.shape[:3], 3, 3), mode=color_mode, gate=color_gate
+        )
     if shade_ambient is not None:
         # Diffuse shading, PREVIEW ONLY (never during training -- see render_tiled_sphere).
         #

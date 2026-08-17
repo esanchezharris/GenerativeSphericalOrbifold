@@ -112,3 +112,47 @@ def test_annealed_max_step_endpoints_and_clamp():
     assert annealed_max_step(args, 400) == pytest.approx(0.74)
     assert annealed_max_step(args, 800) == pytest.approx(0.5)
     assert annealed_max_step(args, 5000) == pytest.approx(0.5), "clamped past the end"
+
+
+class _FakeGuidance:
+    def __init__(self):
+        self.cfg = type("C", (), {"min_step_percent": 0.02, "max_step_percent": 0.98})()
+        self.calls = []
+
+    def update_step(self, epoch, step):
+        pass
+
+    def set_step_range(self, lo, hi):
+        self.calls.append((lo, hi))
+
+
+def test_sds_min_step_raises_the_floor():
+    from omegaconf import OmegaConf
+
+    from escher.guidance.schedule import arm_sds
+
+    g = _FakeGuidance()
+    arm_sds(g, OmegaConf.create({"SDS_MIN_STEP": 0.5, "SDS_ANNEAL_END": 0}), 0)
+    assert g.calls == [(0.5, 0.98)]
+
+    # With the anneal, the max is clamped to never cross the floor.
+    g2 = _FakeGuidance()
+    args = OmegaConf.create(
+        {"SDS_MIN_STEP": 0.6, "SDS_ANNEAL_END": 100, "SDS_MAX_START": 0.98, "SDS_MAX_END": 0.5}
+    )
+    arm_sds(g2, args, 100)  # fully annealed: 0.5 < floor 0.6
+    assert g2.calls == [(0.6, 0.6)]
+
+
+def test_sds_min_step_unset_is_previous_behavior():
+    from omegaconf import OmegaConf
+
+    from escher.guidance.schedule import arm_sds
+
+    g = _FakeGuidance()
+    arm_sds(g, OmegaConf.create({"SDS_ANNEAL_END": 0}), 0)
+    assert g.calls == []  # no anneal, no floor -> untouched, as before
+
+    g2 = _FakeGuidance()
+    arm_sds(g2, OmegaConf.create({"SDS_ANNEAL_END": 100, "SDS_MAX_START": 0.98, "SDS_MAX_END": 0.5}), 0)
+    assert g2.calls == [(0.02, 0.98)]

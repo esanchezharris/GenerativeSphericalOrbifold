@@ -1,0 +1,39 @@
+# STRICT UPSTREAM PARITY (round 10) -- overlay, listed AFTER sphere_texture.yaml
+# + sphere_texture_octa.yaml + sphere_texture_octa_gemfull.yaml:
+#
+#   python escher/main_sphere.py "CONF_FILE=[configs/sphere_texture.yaml,configs/sphere_texture_octa.yaml,configs/sphere_texture_octa_gemfull.yaml,configs/sphere_texture_octa_parity.yaml]" \
+#       RESUME=runs/r10_parity/prep/carve_identity40/checkpoint.pt START_STEP=0 \
+#       "PROMPT=A professional cartoon of a fish, a masterpiece" KITE_N=40 \
+#       OUTPUT_DIR=runs/r10_parity/parity_fish
+#
+# The round-10 audit found that the regime the GEM paper actually demonstrates --
+# greyscale at guidance 100, 10:1 shape:texture LRs, full-run joint, constant
+# t ~ U(0.02, 0.98) -- had NEVER been executed on the sphere: every prior run was
+# color at guidance 30 under the anneal, and the pre-fix LR smuggling ran the
+# round-5/6 "LR_W 0.1" arms at 0.03. gemfull supplies full-run joint + LR_W 0.1
+# + StepLR + zero area regs + roll 45 + drop 50 + the fold-safety kit; this
+# overlay closes the remaining rows to upstream base.yaml.
+
+GUIDANCE_SCALE: 100.0        # base.yaml:33 -- "high values (100) trade diversity for quality"
+BW: true                     # base.yaml:43 -- the paper's figures are greyscale BY DESIGN
+SDS_ANNEAL_END: 0            # upstream samples t ~ U(0.02, 0.98) the whole run (no anneal)
+ISOLATED_TILE_FRACTION: 1.0  # upstream renders the single tile, always -- never a tiled view
+CROP_RENDERINGS: true        # upstream crops every render to the figure bbox (main.py:510-519)
+W_REGULARIZATION: 0.0        # base.yaml:19
+NEGATIVE_PROMPT: ""          # base.yaml:15 -- upstream ships no negative prompt
+TEXTURE_TV_WEIGHT: 0.0       # upstream has no TV prior
+TEXTURE_FILL_WEIGHT: 0.0
+TEXTURE_EMA_DECAY: 0.0
+TEXTURE_INIT_PATH: null      # no image anchor: SDS paints everything
+TEXTURE_INIT_COLOR: null
+TEXTURE_INIT_RANDOM: true    # upstream main.py:410 -- uniform-random texel init
+RESET_TEXTURE_ON_RESUME: true  # the resume carries only the SHAPE (undeformed kite);
+                               # this run's own random texture init must survive it
+
+# Deliberate deviations, kept because the sphere requires them (rationale in
+# sphere.yaml + gemfull): COTANGENT_RELATIVE_WEIGHTS (the natural configuration
+# is outside the absolute parameterization), W_REVERT_ON_FOLD + revert kit (no
+# planar injectivity theorem here), IMAGE_BATCH_SIZE 4 (VRAM),
+# ISOLATED_DISTANCE 2.4 with crop ON (the margin preserves antialias outline
+# gradients while SDS still sees a frame-filling figure -- crop is upstream's
+# own mechanism for exactly this).

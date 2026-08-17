@@ -1,0 +1,35 @@
+# THE FINAL RECIPE (frozen 2026-08-11, round 5) -- overlay listed AFTER
+# sphere_texture.yaml + sphere_texture_octa.yaml:
+#
+#   python escher/main_sphere.py \
+#     "CONF_FILE=[configs/sphere_texture.yaml,configs/sphere_texture_octa.yaml,configs/sphere_texture_octa_final.yaml]" \
+#     RESUME=<KITE_N-40 carve>/checkpoint.pt START_STEP=0 \
+#     TEXTURE_INIT_PATH=<baked anchor>.npy
+#
+# = sphere_texture_octa_gemfull.yaml (full-run joint, LR_W 0.1, zero area regs,
+# roll augmentation, StepLR, drop 50, fold-revert safety) at KITE_N 40 -- the
+# recipe behind gemfull_hires_s0, the round-5 winner. Measured basis:
+#   - full-run joint at 10:1 LR, ~zero regs: outline articulates instead of
+#     smoothing (six-arm batch, 42k+ joint steps, zero folds/reverts)
+#   - image anchor: decisive (both anchor-less arms collapsed to painted-on fish)
+#   - KITE_N 40 (160 boundary verts): best-reading outline of the round
+#   - reg dose ladder: 0% pure interlock / 2% vivid but inter-figure field /
+#     10% smoothed + 5x slower solver -- 0% is the recipe
+#   - prompt: subject-forward minimal template shapes outlines (4-arm planar
+#     lab); style clauses may still be used where their TEXTURE style is wanted
+#
+# The knobs are inherited from the gemfull overlay to keep one source of truth:
+CONF_INCLUDE_NOTE: "this file intentionally mirrors sphere_texture_octa_gemfull.yaml"
+FREEZE_SHAPE_AFTER: 7000
+LR_W: 0.1
+LR_STEP_SCHEDULE: true
+COTANGENT_RELATIVE_WEIGHTS: true
+EQUAL_AREA_WEIGHT: 0.0
+AREA_TAIL_WEIGHT: 0.0
+BOUNDARY_SMOOTH_WEIGHT_W: 0.0
+W_REGULARIZATION: 0.02
+ISOLATED_ROLL_DEG: 45.0
+TEXTURE_DROP_PROB: 50
+RESET_SHAPE_OPTIMIZER_ON_RESUME: true
+W_REVERT_ON_FOLD: true
+KITE_N: 40

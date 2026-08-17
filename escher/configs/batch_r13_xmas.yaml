@@ -1,0 +1,59 @@
+# Round 13 -- THE ORNAMENT SUBJECTS, on the round-12 clean stack.
+#
+#   python -m escher.pipeline escher/configs/batch_r13_xmas.yaml
+#
+# The round-11 Christmas sweep was cancelled after one arm because of the
+# inter-figure murk. Round 12 diagnosed and killed it
+# (configs/sphere_texture_octa_clean.yaml: flat init + gutter refill + WHITE
+# compositing, murk 0.242 -> 0.070 with articulation up to perim 1.890).
+# This resumes the subjects the user picked, on that stack.
+#
+# Gingerbread is NOT rerun -- runs/r12_ablation/abl_white_bg IS the gingerbread
+# keeper. The kite56 lever (cancelled mid-flight in round 11) rides along on
+# the clean stack, since articulation capacity is the one lever that never got
+# its answer.
+#
+# Prereqs (both exist): runs/r10_parity/prep/carve_identity40/checkpoint.pt,
+# runs/r11/prep/identity56/checkpoint.pt.
+
+batch_name: r13_xmas
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml, configs/sphere_texture_octa_clean.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+
+jobs:
+  - figure: xmas_tree
+    prompt: "A professional cartoon of a Christmas tree, a masterpiece, on a white background"
+
+  - figure: xmas_snowman
+    prompt: "A professional cartoon of a snowman, a masterpiece, on a white background"
+
+  - figure: xmas_stocking
+    prompt: "A professional cartoon of a Christmas stocking, a masterpiece, on a white background"
+
+  - figure: xmas_reindeer          # hard mode: limbed + antlered
+    prompt: "A professional cartoon of a reindeer, a masterpiece, on a white background"
+
+  - figure: xmas_candycane         # hard mode: thin / elongated
+    prompt: "A professional cartoon of a candy cane, a masterpiece, on a white background"
+
+  - figure: ginger_kite56          # the cancelled articulation-capacity lever,
+    # now on the clean stack: does 224 boundary verts beat the 160-vert 1.890?
+    prompt: "A professional cartoon of a gingerbread man, a masterpiece, on a white background"
+    reuse_carve: runs/r11/prep/identity56/checkpoint.pt
+    stages:
+      texture:
+        KITE_N: 56

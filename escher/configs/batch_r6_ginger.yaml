@@ -1,0 +1,42 @@
+# Round 6, gated arm -- launch only after judging gingerbread phase 2b
+# (runs/gingerbread3): a CHUNKIER silhouette family attacks the root cause of
+# the tray ground (limbs create inter-figure gaps SDS fills with "baking
+# sheet"), and the chroma-floor knobs carry whatever 2b proved about the
+# ground. Fresh screen + KITE_N-40 carve; reuses the existing color anchor.
+#
+#   python -m escher.pipeline escher/configs/batch_r6_ginger.yaml
+
+batch_name: r6_ginger
+runs_root: runs
+
+jobs:
+  - figure: ginger_chunky
+    orbifold: [2, 3, 4]
+    texture_seeds: [0]
+    color_target: runs/gingerbread/gingerbread_img/targets/color.png
+    prompt: "A professional cartoon of a cute gingerbread man, a masterpiece"
+    silhouette_prompt: "a plain solid black silhouette of a chubby gingerbread man with thick short arms and legs held close to the body, white background, minimal flat logo, centered, full body"
+    seeds: [0]
+    stages:
+      target:
+        N: 32
+        STEPS: 30
+      screen:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml]
+        TARGET_SWEEP_STEPS: 150
+        KEEP_CHECKPOINTS: 1
+      carve:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml, configs/sphere_shape_weights_fish2_hi.yaml]
+        SHAPE_STEPS: 1500
+        KEEP_CHECKPOINTS: 2
+      texture:
+        CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml]
+        KITE_N: 40
+        TEXTURE_FILL_WEIGHT: 25.0
+        TEXTURE_FILL_CHROMA_MIN: 0.15
+        TORCH_COMPILE: true
+        TIMING: true
+        KEEP_CHECKPOINTS: 5
+        TEXTURE_EMA_DECAY: 0.998
+      render:
+        TINT: true

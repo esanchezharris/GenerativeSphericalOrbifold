@@ -1,0 +1,51 @@
+# Round 18b -- the WINNER recipe, generalized to the ornament subjects.
+#
+#   python -m escher.pipeline escher/configs/batch_r18_parity_subjects.yaml
+#
+# The round-18 retrospective verdict (user pick): r10_parity/parity_fish +
+# XMAS 3-colour + COLORIZE_MODE "figure" is the winning look. The reason is
+# structural: the parity stack's figures FILL their tiles, so the colorize has
+# no bare ground to betray -- and figure mode keeps whatever near-white
+# remains white on every tile, so tile boundaries stay invisible.
+#
+# So: the TRAINING stanza below is byte-identical to batch_r10_parity.yaml
+# (strict paper parity -- BW, guidance 100, 10:1, random init, random
+# backgrounds, VAE encoder, res 256; none of the later clean/fast/penalty
+# deltas, which is where the look drifted). Only the subject changes per job,
+# via the same "A professional cartoon of X, a masterpiece" template the fish
+# used. The RENDER stage is the winning treatment.
+#
+# ~70 min/arm on the parity stack; 6 arms ~= 7 h.
+
+batch_name: r18_parity_subjects
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml]
+      KITE_N: 40           # must match the identity checkpoint
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+      COLORIZE_MODE: "figure"
+
+jobs:
+  - figure: ginger
+    prompt: "A professional cartoon of a gingerbread man, a masterpiece"
+  - figure: tree
+    prompt: "A professional cartoon of a Christmas tree, a masterpiece"
+  - figure: snowman
+    prompt: "A professional cartoon of a snowman, a masterpiece"
+  - figure: stocking
+    prompt: "A professional cartoon of a Christmas stocking, a masterpiece"
+  - figure: reindeer
+    prompt: "A professional cartoon of a reindeer, a masterpiece"
+  - figure: candycane
+    prompt: "A professional cartoon of a candy cane, a masterpiece"

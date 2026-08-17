@@ -1,0 +1,92 @@
+# Round 16b -- build on the arm that kept the figure.
+#
+#   python -m escher.pipeline escher/configs/batch_r16_fill2.yaml
+#
+# ROUND-16a VERDICT (7 arms, gingerbread, rosette deg at cone2a/cone3/cone2b,
+# white fraction, perimeter):
+#
+#   ctrl          31.75 /  2.75 / 0.00 | 0.374 | 1.760
+#   tiled_75      29.75 /  3.00 / 0.00 | 0.330 | 1.770   no effect
+#   tiled_50      40.75 / 12.25 / 8.50 | 0.556 | 1.752   WORSE
+#   nbr2           6.50 /  0.00 / 3.50 | 0.150 | 2.268   metric wins, FIGURE GONE
+#   nbr3           0.00 /  0.00 / 0.00 | 0.172 | 1.993   metric perfect, FIGURE GONE
+#   nbr2_tiled    10.25 /  0.00 / 7.00 | 0.624 | 1.502   worse than either alone
+#   prompt_wide    4.75 /  5.25 / 23.25| 0.395 | 2.032   FIGURE INTACT, best by eye
+#
+# The context levers work on the metric and fail on the eyes: at 2-3 neighbours
+# the background falls to 21%/11%, the outline signal goes with it, and the
+# pockets vanish because the SUBJECT dissolves into generic mass that fills
+# everything. Rosette radius alone is therefore not a sufficient gate -- an arm
+# must keep readable gingerbread men.
+#
+# prompt_wide is the opposite: densely interlocking, unmistakable figures with
+# faces and buttons, and cone2a 31.75 -> 4.75. But its pocket RELOCATED to the
+# twin order-3 corner (cone2b 0.00 -> 23.25). That is the round-16 forensic
+# finding restated -- the carve trades area between the two order-3 corners, one
+# fattening while its twin spikes -- so the figure now fills one and misses the
+# other.
+#
+# So this batch keeps the wide prompt as the BASE (it is what preserves the
+# subject) and adds the one lever that does not cost background: a direct charge
+# on unpainted texels. nbr1 is included because round-16a only sampled 2 and 3,
+# and the usable range is clearly below that.
+#
+# JUDGE THE FIGURE FIRST, the rosette number second.
+
+batch_name: r16_fill2
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a gingerbread man with long arms and legs stretched wide, a masterpiece, on a white background"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml, configs/sphere_texture_octa_clean.yaml, configs/sphere_texture_octa_fast.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+      TEXTURE_FILL_WHITE_LEVEL: 0.85
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+
+jobs:
+  # --- the direct lever, corner-focused: charges the pockets, spares the icing
+  - figure: wide_white_lo
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 200.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+
+  - figure: wide_white_hi          # is weight or focus what matters?
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+
+  # uniform charge: the "fill the whole tile" version. Watch for a figure gone
+  # uniformly grey because the penalty ate its highlights and icing.
+  - figure: wide_white_uniform
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.0
+
+  # --- the untested low end of the context lever (40% background retained) ----
+  - figure: wide_nbr1
+    stages:
+      texture:
+        ISOLATED_NEIGHBOURS: 1
+
+  # --- what the diagnosis predicts should win: the prompt keeps the subject,
+  # the corner charge mops up the relocated pocket, one neighbour supplies just
+  # enough context without starving the outline signal.
+  - figure: wide_white_nbr1
+    stages:
+      texture:
+        TEXTURE_FILL_WHITE_WEIGHT: 1000.0
+        TEXTURE_FILL_CORNER_UV: 0.15
+        ISOLATED_NEIGHBOURS: 1

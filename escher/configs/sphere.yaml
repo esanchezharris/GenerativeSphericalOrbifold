@@ -55,6 +55,63 @@ COTANGENT_RELATIVE_WEIGHTS: false
 TEXTURE_RESOLUTION: 256
 LR_TEXTURE: 0.01
 CLAMP_TEXTURE: true
+# Upstream GEM parity (base.yaml BW: True, main.py:624-625): constrain the paint to
+# greyscale -- channel 0 of the parameter tiled to RGB at render time, so SDS can only
+# deposit luminance. The paper's figures are greyscale BY DESIGN (guidance 100 trades
+# color for shape quality; its RGB ablation shows the degradation). false = full-color
+# parameter = every prior run, bitwise.
+BW: false
+# Upstream parity option (main.py:410): uniform-random per-texel init instead of a
+# flat color. Ignored when TEXTURE_INIT_PATH is set; takes precedence over
+# TEXTURE_INIT_COLOR. false = flat init = every prior run.
+TEXTURE_INIT_RANDOM: false
+# Upstream parity option (main.py:339): W starts from N(0, std^2) under the run
+# SEED instead of zeros -- the paper's actual init, a different basin. 0.0 = zeros.
+W_INIT_RANDN: 0.0
+# The IFT adjoint is exact only at a converged forward solve; the achieved
+# stationarity |Pg|_inf is logged every unfrozen step (metrics.csv). A value
+# here (> 0) additionally prints a warning when a step exceeds it. 0 = observe.
+STATIONARITY_WARN: 0.0
+
+### solver acceleration (all default to the reference behavior)
+# With the encoder swap done, the CPU Tutte solve is the dominant per-step cost.
+# Each knob below was measured; every one is verified against tests/test_golden_
+# solution.py (the MATLAB-output pin) and the finite-difference gradient gate.
+#
+# Provably exact -- these change nothing but the work done:
+SOLVER_CACHE_AFFINE: false   # A and b are run constants in weights mode, yet
+                             # AffineSpace (dense eigvalsh + Cholesky) was rebuilt
+                             # every solve. Bit-identical. ~1.5 ms/step.
+ADJOINT_REUSE_FACTOR: false  # keep the previous adjoint LU and use it as a GMRES
+                             # preconditioner. Exact -- GMRES drives the TRUE
+                             # residual, which the code already gates on. The
+                             # factorization is 74% of the adjoint and 60x its own
+                             # solve. ~20-26 ms/step at KITE_N 40.
+# Same fixed point, different route (measured max vertex move 4e-9, vs a 1e-6
+# golden gate):
+SOLVER_PRECOND_EVERY: 1      # rebuild the Laplacian preconditioner every K solves.
+                             # It only steers; measured iteration penalty at K=5
+                             # (or even K=inf) is ZERO. ~14 ms/step.
+SOLVER_TWO_LOOP_ORDER: "reference"  # "textbook" fixes the L-BFGS two-loop
+                             # recursion, whose second loop runs newest->oldest
+                             # here (Nocedal & Wright 7.4 requires oldest->newest).
+                             # It is a FAITHFUL port of the same deviation in
+                             # OptimSolverLBFGS_NEW.m -- which is why memory is
+                             # pinned at 3: with the wrong order more pairs make
+                             # the direction WORSE. Fixed + memory 8: 33 -> 23
+                             # iterations/step.
+SOLVER_MEMORY: 3             # only worth raising with SOLVER_TWO_LOOP_ORDER textbook
+SOLVER_TOL_GRAD: 0.0         # stop on |Pg|_inf -- the quantity the IFT adjoint
+                             # actually needs, already logged per step. At 1e-8:
+                             # 33 -> 22 iters for achieved stationarity 7e-9 and a
+                             # 5e-8 relative gradient move (~7 orders under SDS
+                             # noise). Do not exceed 1e-7.
+SOLVER_LINE_SEARCH: "backtrack"  # "interp" adds a warm starting step and a
+                             # safeguarded quadratic on first rejection: -33%
+                             # f-evals in the WARM regime, but measured WORSE cold.
+# Upstream GEM parity: StepLR x0.1 at 80% of N_STEPS on BOTH parameter groups
+# (their SCHEDULER: step default). false = constant LRs = every prior run.
+LR_STEP_SCHEDULE: false
 
 ### rendering
 IMAGE_BATCH_SIZE: 4   # views per step. 12 GB VRAM: 4 at 512 fits, 6 is tight.
@@ -68,6 +125,11 @@ TILE_CENTRIC_VIEWS: true
 CAMERA_DISTANCE: 1.4  # cap half-angle ~44 deg: one tile dominant, neighbours visible
 CAMERA_FOV: 40.0
 VIEW_JITTER_DEG: 12.0
+# GEM's random-rigid augmentation for ISOLATED training views: std-dev (degrees) of a
+# random roll about the view axis, view 0 kept clean (upstream vertex_augmentation is
+# randn * pi/4 = 45 deg std). 0 = off = every prior run. Without it the isolated pass
+# always frames the tile at one fixed orientation and the outline overfits that pose.
+ISOLATED_ROLL_DEG: 0.0
 RANDOM_BACKGROUND: true
 # Snapshots and turntables frame the whole sphere, unlike the close-up training views.
 PREVIEW_DISTANCE: 3.0
@@ -113,6 +175,46 @@ SILHOUETTE_FIGURE_VALUE: 0.1    # near-black figure, matching the prompt
 SILHOUETTE_BACKGROUND_VALUE: 0.95  # on a near-white background
 
 ISOLATED_TILE_FRACTION: 0.5
+# Surround the isolated tile with this many of its nearest group images instead
+# of flat background (0 = today: the tile alone). The isolated pass exists so SDS
+# grades ONE figure, but on a flat background it also teaches that whatever the
+# figure does not cover is fine -- and it is not: at each rotation centre k tile
+# copies pinwheel around one vertex, so an unpainted corner becomes a
+# conspicuous multicoloured rosette that no single-tile view can show. The camera
+# and the crop keep framing the centre tile, so the figure's size in frame is
+# unchanged; only its surroundings become real neighbours. Costs one extra
+# solid-texture render (~2.6 ms of a ~220 ms step) to get the centre alpha.
+#
+# MEASURED FRAMING (sweep at ISOLATED_DISTANCE 2.4, gingerbread): the centre
+# tile holds 40% of the frame at EVERY neighbour count -- the camera pinning
+# works -- but the background shrinks 60% -> 21% -> 11% -> 5% at 0/2/3/6
+# neighbours. Background is where the outline gradients live (round 2: with no
+# background pixels dr.antialias has no silhouette discontinuity and vertex
+# gradients are exactly zero), and a 250-step smoke at 6 confirmed it: the
+# perimeter stalled at 1.038 where the control reaches ~1.29. USE 2, at most 3.
+ISOLATED_NEIGHBOURS: 0
+
+# Charge for texels the figure never painted (0 = off). The round-16 diagnostic
+# found flat white pockets at every rotation centre -- std EXACTLY 0.0000 over a
+# 32-texel disc -- because every SDS view is one tile on white, where leaving the
+# corner blank scores perfectly. Unlike TEXTURE_FILL_WEIGHT (a CHROMA floor) this
+# works under BW, where chroma is identically zero and that loss has nothing to
+# push on. Quadratic excess above the level, so merely-light paint is untouched.
+# Unlike the context levers this does not need the diffusion model to notice
+# anything -- it is direct pressure on the atlas.
+TEXTURE_FILL_WHITE_WEIGHT: 0.0
+TEXTURE_FILL_WHITE_LEVEL: 0.85   # matches metrics_rosette.WHITE_LEVEL
+# 0 = charge the whole tile equally; > 0 is a Gaussian sigma in UV units focusing
+# the penalty on the cone corners (the kite spans 0.9, so 0.15 is a corner
+# neighbourhood). Focusing protects legitimate white elsewhere -- icing,
+# highlights -- which a uniform penalty would flatten along with the pockets.
+TEXTURE_FILL_CORNER_UV: 0.0
+# Uniform base blended under the corner peaks: weight = floor + (1-floor)*gaussian.
+# The pure Gaussian gives mid-tile texels ~zero weight, so corner focus and
+# whole-tile fill were an either/or; a small floor (e.g. 0.1) charges the
+# rotation-centre pockets hard AND any background filler mildly, in one term.
+# Only read when TEXTURE_FILL_CORNER_UV > 0.
+TEXTURE_FILL_CORNER_FLOOR: 0.0
 # Must be close enough that the TILE fills the frame. At 2.6 a lone tile covers only ~1/8 of
 # the view, which teaches the model to paint small figures -- the opposite of what is wanted.
 ISOLATED_DISTANCE: 1.7
@@ -127,6 +229,15 @@ PRETRAINED_MODEL_NAME_OR_PATH: "Manojb/stable-diffusion-2-1-base"
 # base.yaml uses 100. That suits the planar setup but here it drives the texture into
 # high-frequency artefacts; 50 trades a little prompt fidelity for markedly cleaner figures.
 GUIDANCE_SCALE: 50.0
+# Which encoder maps the render into SD latent space. MEASURED (timing.csv over 14
+# full runs): the encoder is ~48% of wall clock -- it is the ONLY network in the
+# SDS backward, so we pay it twice, and it costs 2.1x the diffusion UNet it feeds.
+#   "vae"       AutoencoderKL, posterior sample -- every prior run, the default
+#   "vae_mean"  same encoder, posterior MEAN (control: isolates the sampling noise)
+#   "taesd"     madebyollin/taesd -- ~1.2M params, no GroupNorm, no attention;
+#               emits SD's already-scaled latents (its scaling_factor is 1.0)
+#   "taesd_bwd" SD latents in the forward, TAESD's Jacobian in the backward
+SDS_ENCODER: "vae"
 USE_HALF_PRECISION: true
 CLIP_GRADIENTS_IN_SDS: true
 
@@ -158,6 +269,10 @@ TEXTURE_TV_WEIGHT: 0.0
 SDS_ANNEAL_END: 0
 SDS_MAX_START: 0.98
 SDS_MAX_END: 0.5
+# Raise the sampled-timestep FLOOR (0 = model default 0.02). High floors keep SDS
+# in the layout band -- low-t samples are where high-frequency detail is deposited
+# (spectral autoregression). Round-7 mark-refinement guard; clamps the anneal max.
+SDS_MIN_STEP: 0.0
 
 ### presentation
 # Ambient floor for the diffuse shading applied to render_final's video and stills
@@ -172,8 +287,106 @@ SHADE_AMBIENT: 0.55
 # conflicting hues into the one shared texture).
 TILE_TINT: false
 PALETTE_HUES_DEG: [0.0, 120.0, -120.0]
+# Colorization: per-tile DIAGONAL RGB scaling along the same 3-coloring. The hue
+# tint is a NO-OP on greyscale (BW) textures (achromatic fixed point); this is
+# the color presentation for them. null palette = the pastel default
+# (palette.PASTEL_PALETTE); palette.XMAS_PALETTE is the red/green/gold ornament
+# set. Tint takes precedence when both are armed. Render-time only, like TINT.
+COLORIZE: false
+COLORIZE_PALETTE: null
+# Per-pixel colour treatment for colorize. "flat" = the diagonal scaler applied
+# everywhere (every prior render, bit-exact default). "figure" gates the tint by
+# sampled luminance -- near-white ground stays white on EVERY tile, so tile
+# boundaries through unpainted ground vanish and the corner pockets read as
+# snow. "ink" is the white-fixed-point affine 1 - (I-M)(1-col): affine, so it
+# commutes exactly with mip filtering (no edge halo); dark paint takes the tile
+# colour. NB a white palette entry blanks its tile's figure under "ink" -- pair
+# white with "figure".
+COLORIZE_MODE: "flat"
+# Smoothstep band in texture luminance (tint runs pre-shading): full tint at or
+# below lo, none at or above hi. hi matches the WHITE_LEVEL 0.85 unpainted
+# convention (metrics_rosette); lo keeps icing/highlights fully tinted.
+COLORIZE_GATE: [0.65, 0.85]
 
 ### output
 OUTPUT_DIR: "output/sphere"
 VISUALIZATION_FREQ: 50
+# Snapshot cadence, decoupled from checkpoints/geometry checks; null = same as
+# VISUALIZATION_FREQ (the historical behavior).
+SNAPSHOT_FREQ: null
+# Keep only the newest N step-tagged checkpoints (-1 = keep all, historical).
+# checkpoint.pt (the latest) always survives.
+KEEP_CHECKPOINTS: -1
+
+### joint shape+texture (GEM-parity) window -- all default off; the overlay
+### sphere_texture_octa_joint.yaml arms them together. Only meaningful when
+### FREEZE_SHAPE_AFTER > 0 on a texture run resumed from a carve.
+# Drop the carve's Adam moments for the shape on resume (they were built from
+# mask-loss gradients ~3 orders larger than SDS's and kick the shape at step 0).
+RESET_SHAPE_OPTIMIZER_ON_RESUME: false
+# Weights-mode fold rejection (backtrack toward the last certified W) during the
+# joint window, plus the freeze-latch guard. The deterministic carve never
+# needed it; SDS's noisier pulls make folds plausible again.
+W_REVERT_ON_FOLD: false
+# The carve's outline-smoothness prior, live during the joint window (0 = off).
+BOUNDARY_SMOOTH_WEIGHT_W: 0.0
+### first-time-right levers (round 4; all default off/null)
+# Image-anchored texture init (escher/texture_init.py bakes it): an npy of shape
+# (TEXTURE_RESOLUTION^2, 3) replacing the flat init -- composition and palette
+# decided BEFORE step 0 instead of by early SDS noise (the dominant source of
+# run-to-run variance).
+TEXTURE_INIT_PATH: null
+# Trajectory-average deliverable: checkpoint carries texture_ema alongside the
+# raw texture (load with ema=True / EMA=1). Pure observer. 0 = off; 0.998 gives
+# an effective window of ~500 steps.
+TEXTURE_EMA_DECAY: 0.0
+# Independent SDS noise draws averaged per step (same timestep): 1/N gradient
+# variance at N UNet evals (~+0.18 s/step at 2).
+SDS_NOISE_SAMPLES: 1
+
+# Isolated-view share for the FROZEN tail only (null = ISOLATED_TILE_FRACTION,
+# the historical behavior). Lowering it (e.g. 0.25) makes the frozen texture
+# answer mostly to TILED Escher-context views -- the round-2 lever against the
+# nested-figure attractor that isolated views reinforce.
+ISOLATED_TILE_FRACTION_FROZEN: null
+# GEM's texture drop, percent of the batch (planar runs 50): dropped elements
+# render the tile as a flat random-gray cutout -- a pure OUTLINE signal under
+# the same prompt. Isolated + unfrozen steps only. 0 = off.
+TEXTURE_DROP_PROB: 0.0
+# GEM's tight crop of isolated views (alpha-bbox x1.1, resized back): SDS sees a
+# frame-filling figure while the camera keeps the margin antialias needs.
+CROP_RENDERINGS: false
+
+### zero-background texture levers (all default off; see escher/rendering/texture_mask.py)
+# Chroma floor on the sampled texels: the per-tile hue tint is a rotation about the
+# RGB gray axis, so achromatic (white/gray) paint renders identically in EVERY tile
+# and reads as one continuous background field. Weight ~10-50 against TV's 100.
+TEXTURE_FILL_WEIGHT: 0.0
+TEXTURE_FILL_CHROMA_MIN: 0.15
+# Every N steps, refill the never-rasterized ~60% of texels with their nearest
+# sampled color (mip-leak fix during training; render_final always fills at export
+# unless GUTTER=0). 0 = off.
+TEXTURE_GUTTER_FILL_EVERY: 0
 DEVICE: "cuda"
+# Per-phase timing breakdown (escher/misc/timing.py) -> timing.csv beside metrics.csv.
+# Inserts cuda synchronize at phase boundaries, which itself slows the loop -- enable
+# only when measuring, never for production runs.
+TIMING: false
+# Rasterizer for the cached default nvdiffrast context: "gl" reproduces every prior
+# run bit-identically; "cuda" is a different rasterizer implementation (edge pixels
+# may differ at exact coverage ties) -- opt-in A/B only.
+RASTER_CONTEXT: "gl"
+
+### GPU backend toggles -- all opt-in; each changes kernel/algorithm selection, so
+### runs are statistically (not bitwise) comparable with them on. Measured on the
+### 60-step timing probe before changing any default.
+# cudnn autotune; every conv shape in the loop is static, the classic best case.
+CUDNN_BENCHMARK: false
+# TF32 matmul/conv for float32 GPU work (the diffusion stack is fp16; this touches
+# only the float32 remainder).
+ALLOW_TF32: false
+# NHWC memory format for the UNet.
+CHANNELS_LAST: false
+# torch.compile the UNet + VAE encoder. First step pays a minutes-long compile;
+# only sensible for full-length texture runs.
+TORCH_COMPILE: false

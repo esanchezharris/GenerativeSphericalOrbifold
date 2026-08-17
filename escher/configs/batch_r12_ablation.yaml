@@ -1,0 +1,105 @@
+# Round 12 -- KILL THE MURK: the artifact ablation night.
+#
+#   python -m escher.pipeline escher/configs/batch_r12_ablation.yaml
+#
+# The round-11 sweep was cancelled after arm 1 because the inter-figure zones
+# show murky dark streaks/pools. A read-only diagnostic on that checkpoint
+# (runs/r11_xmas/ctrl_ginger/tex_s0) measured the anatomy:
+#
+#   H1 RESIDUAL INIT NOISE dominates the streaky murk. Mid-dark texels keep
+#      57-65% of random-noise amplitude, and the 58.6% UV gutter is LITERALLY
+#      still the seeded init draw after 7000 steps (corr(HP final, HP init)
+#      0.72-0.79; 4096 texels bit-identical) -- mips average it into every
+#      minified view. In the painted core the init is fully overwritten
+#      (R^2 0.002-0.05), so random init bought nothing and flat init costs
+#      nothing. FIXED IN THE BASE.
+#   H2 THE BLACKS ARE DELIBERATE: a smoothly painted dark ring 8-16 texels
+#      OUTSIDE the tile boundary (the smoothest region anywhere) is what
+#      bilinear/mip taps drag into every tile edge.
+#   H3 CORNER POOLS ARE A MIP ARTIFACT, not a geometry pocket: corner faces
+#      are COMPRESSED (median stretch 0.67, and corner texels are the
+#      BRIGHTEST at 0.59), so minification samples high mips = averaged dark
+#      ring + gutter noise. The real stretch pathology (6678x face-area range
+#      at zero regs) lives on BOUNDARY faces: 25.2% of surface on 9.8% of
+#      texels.
+#   BLIND SPOT: ISOLATED_TILE_FRACTION 1.0 + crop means the between-figure
+#      region was never in the SDS loss at all.
+#
+# BASE = the parity recipe + "hygiene" (both fixes measured content-free):
+# flat init + training-time gutter refill. Each arm adds ONE lever. Judged
+# against the existing runs/r11_xmas/ctrl_ginger (same subject, same seed) --
+# no control rerun needed.
+#
+# MEASURED CONSTRAINT (smoke, 2026-08-13): TEXTURE_RESOLUTION 512 does NOT fit
+# on this 12 GiB card alongside the SDS batch -- the run reached ~11.8/12.3 GiB
+# and then made zero progress for 12 minutes at 100% GPU (WDDM spilling to
+# shared memory). Every arm therefore stays at 256; the resolution lever needs
+# IMAGE_BATCH_SIZE 2 or gradient checkpointing first, which would confound this
+# comparison. Its slot went to abl_ringfix, which targets the diagnostic's
+# actual mip mechanism more directly anyway.
+
+batch_name: r12_ablation
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/r10_parity/prep/carve_identity40/checkpoint.pt
+  prompt: "A professional cartoon of a gingerbread man, a masterpiece"
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml, configs/sphere_texture_octa_parity.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+      # --- the hygiene base (H1) ---
+      TEXTURE_INIT_RANDOM: false      # flat 0.5 instead of per-texel noise
+      TEXTURE_GUTTER_FILL_EVERY: 250  # refill unrasterized texels so mips stop
+                                      # averaging leftover init noise
+    render:
+      TINT: false
+      COLORIZE_PALETTE: [[0.86, 0.30, 0.30], [0.38, 0.64, 0.40], [0.93, 0.78, 0.42]]
+
+jobs:
+  - figure: abl_hygiene            # the base alone: how much was just H1?
+
+  # --- ground look A: white / snow-icing (redirect H2) ---
+  - figure: abl_white
+    prompt: "A professional cartoon of a gingerbread man, a masterpiece, on a white background"
+
+  - figure: abl_white_bg           # + white compositing instead of random
+    prompt: "A professional cartoon of a gingerbread man, a masterpiece, on a white background"
+    stages:
+      texture:
+        RANDOM_BACKGROUND: false
+
+  # --- ground look B: dark but CLEAN (smooth the murk, keep the look) ---
+  - figure: abl_dark_clean
+    stages:
+      texture:
+        TEXTURE_TV_WEIGHT: 25.0
+
+  # --- ground look C: geometric (tame the 6678x boundary stretch) ---
+  # Smoked at 300 steps: perim 1.257 at step 200 (vs 1.253 unregularized --
+  # articulation intact) with area spread 11 instead of 38. Zero folds.
+  - figure: abl_geom
+    stages:
+      texture:
+        EQUAL_AREA_WEIGHT: 25.0
+        AREA_TAIL_WEIGHT: 40.0
+
+  # --- attack the mip mechanism head-on: never let the ring go stale ---
+  # The dark ring + noisy gutter are what high mips average in at corners.
+  # Refilling every 50 steps keeps the gutter equal to the nearest FIGURE
+  # color throughout training, not just at export.
+  - figure: abl_ringfix
+    stages:
+      texture:
+        TEXTURE_GUTTER_FILL_EVERY: 50
+
+  # --- close the blind spot: put the inter-figure region IN the loss ---
+  - figure: abl_tiled
+    stages:
+      texture:
+        ISOLATED_TILE_FRACTION: 0.75

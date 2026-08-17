@@ -1,0 +1,65 @@
+# Round 6 -- closing the open questions from round 5's evidence:
+#   1. fish_cartoon_s0: does the lab-winner minimal template beat the
+#      flat-vector pile ON THE FLAGSHIP FISH at hires? (A/B against the
+#      existing gemfull_hires_s0, same carve/anchor/seed.)
+#   2. fish_hires_s1:  seed invariance of the FROZEN recipe (hires carve +
+#      anchor + zero-reg full joint) -- the first-time-right acceptance.
+#   3. fish_cartoon_s1: completes the 2x2 (template x seed) at hires.
+#   4. gecko_cartoon:  Escher's own subject class (reptiles tile; limbs curl).
+#      Full chain, first try, frozen recipe + lab-winner template.
+#
+#   python -m escher.pipeline escher/configs/batch_r6.yaml
+
+batch_name: r6
+runs_root: runs
+
+defaults:
+  orbifold: [2, 3, 4]
+  texture_seeds: [0]
+  reuse_carve: runs/gem_full/prep/carve_hi/checkpoint.pt
+  color_target: assets/targets/fish64/color.png
+  stages:
+    texture:
+      CONF_FILE: [configs/sphere_texture.yaml, configs/sphere_texture_octa.yaml, configs/sphere_texture_octa_gemfull.yaml]
+      KITE_N: 40
+      TORCH_COMPILE: true
+      TIMING: true
+      KEEP_CHECKPOINTS: 5
+      TEXTURE_EMA_DECAY: 0.998
+    render:
+      TINT: true
+
+jobs:
+  - figure: fish_cartoon_s0
+    prompt: "A professional cartoon of a fish, a masterpiece"
+
+  - figure: fish_hires_s1
+    prompt: "a fish with scales and fins, flat vector illustration, solid pastel colors, simple shapes, a masterpiece"
+    stages:
+      texture:
+        SEED: 1
+
+  - figure: fish_cartoon_s1
+    prompt: "A professional cartoon of a fish, a masterpiece"
+    stages:
+      texture:
+        SEED: 1
+
+  - figure: gecko_cartoon
+    reuse_carve: null
+    color_target: auto
+    prompt: "A professional cartoon of a gecko lizard, a masterpiece"
+    silhouette_prompt: "a plain solid black silhouette of a gecko lizard with splayed legs and curled tail, white background, minimal flat logo, centered, full body"
+    seeds: [0]
+    stages:
+      target:
+        N: 32
+        STEPS: 30
+      screen:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml]
+        TARGET_SWEEP_STEPS: 150
+        KEEP_CHECKPOINTS: 1
+      carve:
+        CONF_FILE: [configs/sphere_shape_weights_fish2.yaml, configs/sphere_shape_weights_fish2_hi.yaml]
+        SHAPE_STEPS: 1500
+        KEEP_CHECKPOINTS: 2

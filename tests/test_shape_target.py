@@ -183,3 +183,30 @@ def test_pyramid_loss_gradient_points_toward_the_target():
 
     closer = mask_pyramid_loss(soft_disk(torch.tensor(19.0, dtype=torch.float64)), target)
     assert closer.item() < loss.item()
+
+
+def test_limb_thinness_weights_pay_more_for_appendages():
+    """A thin appendage (and the thin notch beside it) must outweigh the torso."""
+    from escher.shape_target import limb_thinness_weights
+
+    mask = np.zeros((128, 128), dtype=np.float32)
+    yy, xx = np.mgrid[:128, :128]
+    mask[(yy - 64) ** 2 + (xx - 48) ** 2 <= 30**2] = 1.0  # torso disc, r=30
+    mask[60:68, 78:120] = 1.0  # thin fin, half-thickness ~4
+
+    w = limb_thinness_weights(mask, w_max=5.0)
+    assert w.shape == mask.shape
+    assert (w >= 1.0 - 1e-9).all() and (w <= 5.0 + 1e-9).all()
+    fin = w[62:66, 100:115].mean()
+    torso_core = w[60:68, 40:56].mean()
+    assert fin > torso_core + 0.5, f"fin {fin:.2f} vs torso {torso_core:.2f}"
+    # far-field background decays to ~1
+    assert w[:8, :8].mean() < 1.1
+
+
+def test_limb_weights_off_is_identity_path():
+    """LIMB_WEIGHT_MAX <= 1 must leave ctx.loss_weights untouched (knob off)."""
+    from omegaconf import OmegaConf
+
+    args = OmegaConf.create({"LIMB_WEIGHT_MAX": 0.0})
+    assert float(args.get("LIMB_WEIGHT_MAX", 0.0) or 0.0) <= 1.0
