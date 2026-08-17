@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/generated-tiling.png" width="640" alt="Generated Escher-style gingerbread tessellations on the sphere, next to the 2024 concept image">
+  <img src="assets/hero-fish.gif" width="420" alt="A sphere tiled with 24 interlocking Escher fish, rotating">
 </p>
 
 <h1 align="center">Generative Spherical Orbifold</h1>
@@ -11,295 +11,201 @@
 
 ---
 
-Give it a prompt ("a fish with scales and fins") and it produces a closed spherical
-surface tiled with that figure in the style of M.C. Escher — the tile's **outline is the
-figure**, every tile interlocking with its neighbors, no gaps and no overlaps, certified:
-the tiled mesh's signed solid angles sum to exactly 4π with zero inverted faces.
+Give it a prompt — `"A professional cartoon of a fish, a masterpiece"` — and it produces a
+closed spherical surface tiled with that figure in the style of M.C. Escher: the tile's
+**outline is the figure**, every tile interlocking with its neighbours, no gaps and no
+overlaps, certified — the tiled mesh's signed solid angles sum to exactly 4π with zero
+inverted faces.
+
+Nothing is pasted on. The tile above starts as an **undeformed kite** and a field of
+random noise; score distillation sculpts both the outline and the shared texture through
+a differentiable spherical orbifold Tutte solve. Diffusion's only role is the score
+gradient — no target silhouette, no image anchor, no reference picture anywhere in the
+loop.
 
 Built on **[Generative Escher Meshes](https://github.com/thibaultgroueix/GenerativeEscherMeshes)**
 (Aigerman &amp; Groueix, SIGGRAPH 2024 — [paper](https://arxiv.org/abs/2309.14564)),
 extended from flat wallpaper tilings to closed spherical surfaces using
 **[Spherical Orbifold Tutte Embeddings](https://github.com/noamaig/spherical_orbifolds)**
-(Aigerman &amp; Lipman, SIGGRAPH 2017). Every image above is an actual output of this
-code, on the octahedral `(2,3,4)` orbifold — 24 tiles, outlines carved by full-mesh
-deformation through the differentiable Karcher solve. The pipeline is prompt-driven, not
-tuned to one figure: the fish and the gingerbread run differ only in their text prompt.
+(Aigerman &amp; Lipman, SIGGRAPH 2017), whose MATLAB reference we ported to Python and
+modernised — and then validated against the original's converged output to **8.3e-9 per
+vertex**.
+
+## The ornament family
+
+Seven subjects, one recipe, one palette, one render treatment. Every sphere below is an
+actual output of this code on the octahedral `(2,3,4)` orbifold — 24 tiles — and differs
+from its neighbours **only in the text prompt**.
+
+<p align="center">
+  <img src="assets/ornament-family.png" width="820" alt="Seven spheres: fish, gingerbread man, reindeer, candy cane, snowman, Christmas tree and stocking, each tiled with its figure">
+</p>
 
 ## How it works
 
-1. **Geometry.** A fundamental domain of a spherical orbifold — a lune for the
-   dihedral `(k,2,2)` groups, a kite for the platonic `(2,3,3)`, `(2,3,4)`, `(2,3,5)`
-   groups — is embedded on the sphere by an orbifold Tutte solve with the Karcher
-   (geodesic) Dirichlet energy, made differentiable via the implicit function theorem
-   (one sparse adjoint solve per backward pass). Two parameterizations: the **edge
-   weights** of the solve (full-mesh deformation, the Generative-Escher-Meshes
-   mechanism — this is what produces the deeply articulated outlines above), or the
-   cut **boundary points** directly. Either way, one side of the cut is free and the
-   other is *generated* by the symmetry group, so tiles interlock by construction.
+1. **Geometry.** A fundamental domain of a spherical orbifold — a lune for the dihedral
+   `(k,2,2)` groups, a kite for the platonic `(2,3,3)`, `(2,3,4)`, `(2,3,5)` groups — is
+   embedded on the sphere by an orbifold Tutte solve with the Karcher (geodesic) Dirichlet
+   energy, made differentiable via the implicit function theorem (one sparse adjoint solve
+   per backward pass). One side of the cut is free and the other is *generated* by the
+   symmetry group, so tiles interlock by construction and the four cone points are pinned
+   where the rotation axes pierce the sphere.
 
-2. **Shape.** Figure silhouettes are generated once with full Stable Diffusion denoising,
-   then **screened by reachability**: shapes that can tile a surface under a fixed
-   symmetry group are a thin subset (every limb needs a complementary notch in a
-   neighbour), and a diffusion model draws with no such constraint. So the pipeline
-   carves a short trial against each candidate and keeps whichever the tiling can
-   actually adopt — measured, that is worth more than the choice of figure. The winner is
-   aligned over the undeformed tile with its **area matched to the tile's** (a tile's area
-   is pinned at `4π/|G|`, so an undersized target caps overlap structurally) and fitted
-   with a deterministic mask loss. The tile silhouette is computed analytically from the
-   projected boundary polygon, so the shape phase needs no renderer and no diffusion model
-   in the loop; a carve takes about two minutes and candidate screening runs in parallel
-   across cores.
+2. **Joint sculpting.** Shape and texture train **together for the whole 7000-step run**,
+   from the undeformed kite. The optimised variable is the *edge weights of the solve*, so
+   every gradient step reshapes the entire domain through the embedding rather than
+   nudging boundary vertices; the outline articulates instead of smoothing. Score
+   distillation drives it at the regime the paper demonstrates — greyscale, guidance 100,
+   shape LR 10× texture LR, constant t∼U(0.02, 0.98), texture-drop 50 for pure-outline
+   signal. Spherical Tutte has no planar injectivity theorem, so a fold-revert safety net
+   watches every step (measured: zero folds and zero reverts across the runs above).
 
-3. **Texture.** With the shape frozen, one shared texture is trained by score
-   distillation (SDS) against the prompt through a differentiable renderer
-   (nvdiffrast); the orbifold constraints make it continuous across every tile
-   boundary.
+3. **Certification.** Validity is never assumed. Every run ends with the signed-solid-angle
+   certificate — total exactly 4π, zero flipped faces, i.e. no gaps and no overlaps — and
+   folding steps are projected back to the valid set during optimisation.
 
-4. **Presentation.** Neighboring tiles are tinted by hue rotations about the RGB gray
-   axis (a proper 3-coloring of the tiling's adjacency graph), which is what makes the
-   interlocking legible — the classic Escher look.
+4. **Presentation.** The 24 tiles share one greyscale atlas and are recoloured at render
+   time by a per-tile matrix along a proper colouring of the tiling's adjacency graph.
+   The colouring is *balanced* and **pinwheel-aware**: with four colours no colour repeats
+   at any of the 14 rotation centres. The recolour is **luminance-gated** (`COLORIZE_MODE:
+   figure`) — near-white texels stay white on every tile, so the ground reads as one
+   continuous field and the tile boundaries through it disappear. Colour lands only on
+   figure paint, which is the rule Escher's own coloured tilings obey.
 
-Validity is never assumed: every run ends with the signed-solid-angle certificate
-(total exactly 4π, zero flipped faces = no gaps and no overlaps), and during
-optimization folding steps are projected back to the valid set.
-
-## Running it
-
-> **Status (round 10, 2026-08-12):** the one-command `r8_chain` was briefly
-> promoted as "the front door". It is in fact a **deterministic baseline**: no
-> score distillation runs anywhere in it — diffusion only *samples two ordinary
-> images* (a silhouette and a flat icon), the tile is carved to the silhouette,
-> and the icon is warped and baked on. It stays in the repo as an
-> ablation/diagnostic (see below), but it is not the papers' mechanism. The
-> project's method — Generative Escher Meshes' joint shape+texture score
-> distillation driven *through* the differentiable spherical orbifold Tutte
-> solve — is the pipeline that follows. Its first strict-parity run (greyscale,
-> guidance 100, 10:1 shape:texture LRs, full-run joint from the undeformed
-> kite: the regime the paper actually demonstrates, never previously executed
-> on the sphere) landed 2026-08-12 — see Results.
-
-### The method: SDS shape+texture through the differentiable solve
-
-This reproduces the fish sphere above end to end (~70 min, most of it step 4):
+## Quickstart
 
 ```bash
-# 1. generate silhouette candidates (GPU, ~9 min for 64)
-python escher/make_target.py OUT_DIR=assets/targets/fish N=64 \
-    PROMPT="a plain solid black silhouette of a fish with rounded fins and a broad tail, white background, minimal flat logo, centered, full body"
+# environment: conda + CUDA torch + requirements + nvdiffrast built from source.
+# (The pins in install.sh predate the environment these results were produced on —
+#  torch 2.6 / CUDA 12.4 — but the sequence of steps is current.)
+bash install.sh
 
-# 2. screen them by REACHABILITY and keep the best (parallel; GPU makes each
-#    candidate carve ~13x faster than CPU)
-python escher/main_shape.py CONF_FILE=configs/sphere_shape_weights_fish2.yaml \
-    SWEEP_TARGETS=true TARGET_DIR=assets/targets/fish
+# 0. one-time: write the undeformed starting state (CPU, seconds)
+python escher/sanity_checks/make_identity_checkpoint.py \
+    OUT_DIR=runs/r10_parity/prep/carve_identity40 KITE_N=40
 
-# 3. carve the tile outline to the winner (GPU ~2.5 min / CPU ~26 min)
-python escher/main_shape.py CONF_FILE=configs/sphere_shape_weights_fish2.yaml \
-    TARGET_MASK=assets/targets/fish/target.npy OUTPUT_DIR=output/fish_shape
-
-# 4. train the shared texture on the frozen shape (GPU; TORCH_COMPILE=true
-#    measured ~18% faster with 1.6 GiB more VRAM headroom)
+# 1. sculpt a sphere from a prompt (GPU, ~70 min: 7000 joint SDS steps)
 python escher/main_sphere.py \
-    "CONF_FILE=[configs/sphere_texture.yaml,configs/sphere_texture_octa.yaml]" \
-    COTANGENT_RELATIVE_WEIGHTS=true TORCH_COMPILE=true \
-    RESUME=output/fish_shape/checkpoint.pt START_STEP=0 \
-    PROMPT="a fish with scales and fins, flat vector illustration, solid pastel colors, simple shapes, a masterpiece" \
-    OUTPUT_DIR=output/fish_tex
+    "CONF_FILE=[configs/sphere_texture.yaml,configs/sphere_texture_octa.yaml,configs/sphere_texture_octa_gemfull.yaml,configs/sphere_texture_octa_parity.yaml]" \
+    RESUME=runs/r10_parity/prep/carve_identity40/checkpoint.pt START_STEP=0 \
+    PROMPT="A professional cartoon of a fish, a masterpiece" \
+    OUTPUT_DIR=output/fish
 
-# 5. deliverables: shaded turntable, textured OBJ, contact sheet (the unsampled
-#    60% of texels are gutter-filled at export; GUTTER=0 restores the raw look)
-python escher/render_final.py output/fish_tex/checkpoint.pt TINT=1
-
-# Optional: scrub residual background paint (deterministic, reversible) and
-# measure the zero-background gate
-python escher/texture_polish.py output/fish_tex/checkpoint.pt
-python escher/metrics_background.py output/fish_tex/checkpoint_polished.pt
-
-# Planar (the original wallpaper-group pipeline, same shape mechanism):
-python escher/main_shape_planar.py                          # carve on the torus
-python escher/main.py CONF_FILE=configs/planar_texture.yaml # GEM-style joint SDS
+# 2. deliverables: turntable, textured OBJ, contact sheet
+python escher/render_final.py output/fish/checkpoint.pt COLORIZE=1 MODE=figure
 ```
 
-### The deterministic baseline (no SDS — ablation/diagnostic, ~35 min)
+**Batches.** The same chain runs unattended over many prompts and seeds — a two-lane
+scheduler overlaps CPU work with the exclusive GPU runs, every stage is its own process
+with typed exit codes, and a manifest plus contact sheet record the night:
 
 ```bash
-python escher/r8_chain.py "FIGURE=a sea turtle with four flippers seen from above"
+python -m escher.pipeline escher/configs/batch_r10_parity.yaml           # the fish
+python -m escher.pipeline escher/configs/batch_r18_parity_subjects.yaml  # six ornaments
+python -m escher.pipeline escher/configs/batch_smoke.yaml --dry-run      # <1 min check
 ```
 
-One argument in, a tiled sphere out, with **zero score distillation**:
-silhouette candidates → per-candidate alignment → escherize-screen (a
-closed-form reachability solve per candidate, seconds each) → realization
-carve of the winner → flat "lineal color" anchor → correspondence-warped
-flat bake → tinted render + turntable, under `runs/chain/<figure>/final/`.
-Useful as a lower bound on what pure geometry + image registration buys, as
-a fast generator of alignment/reachability assets, and as the ablation the
-SDS method is judged against — but its figures are pasted, not generated,
-and it is not the project's result.
-
-### Batch mode
-
-The whole chain also runs unattended over many figures, seeds, and orbifold
-sweeps — a two-lane scheduler overlaps CPU shape work with the exclusive GPU
-texture runs, every stage runs in its own process with typed exit codes, and a
-manifest + contact sheet record the night:
+**Comparing looks without retraining.** Colour modes and palettes are render-time, so any
+finished checkpoint can be re-presented in seconds:
 
 ```bash
-python -m escher.pipeline escher/configs/batch_example.yaml          # real batch
-python -m escher.pipeline escher/configs/batch_smoke.yaml --dry-run  # <1 min check
+python escher/sanity_checks/render_mode_board.py --out board \
+    --checkpoints output/fish/checkpoint.pt --palettes xmas,xmas_white --modes flat,figure,ink
 ```
 
-Configs live in `escher/configs/` (`sphere.yaml` base; `sphere_shape.yaml`,
-`sphere_shape_weights_fish2.yaml` (the A/B-winning carve recipe),
-`sphere_texture.yaml`, `sphere_texture_octa_nobg.yaml` (zero-background levers),
-`planar_shape.yaml`, `planar_texture.yaml` phase overlays). The test suite
-(`pytest tests/`, 300+ tests) runs entirely on CPU, including both shape-phase
-optimizations and the batch driver end to end.
+Configs live in `escher/configs/` (`sphere.yaml` is the base; the rest are phase overlays
+and batch specs). The test suite — **408 tests, `python -m pytest tests/`** — runs entirely
+on CPU, including the solver's golden-output check and the batch driver end to end.
+[`Troubleshooting.md`](Troubleshooting.md) covers the import/`PYTHONPATH` trap, speed
+expectations, and what to check before believing a speed theory.
 
 ## Results
 
-Hard IoU (both masks thresholded at 0.5 — the number that corresponds to filler
-on the sphere; the soft metric a perfect carve can only score ~0.93 on is gone
-from the headline) of the tile silhouette against the area-matched target;
-perimeter relative to the undeformed tile. All on `(2,3,4)`, 24 tiles, fish64
-target, 1500 steps, unless noted.
+**The method, at strict paper parity.** Greyscale SDS at guidance 100, 10:1 learning
+rates, full-run joint from the undeformed kite with a random texture — the regime the
+paper demonstrates, executed on a sphere for the first time. Every tile is a fish with
+body, eye and fanned tail fins; perimeter articulated to **1.407×** the undeformed tile;
+**zero folds and zero reverts across all 7000 joint steps**; 4π certificate at 2.6e-8.
+Config: `sphere_texture_octa_parity.yaml`.
 
-| Run | hard IoU | sr-weighted | Perimeter | Certificate |
-|---|---|---|---|---|
-| Shipped carve (`output/texF_fish`) | 0.824 | 0.797 | 1.200× | 4π at 2.3e-13, 0 folds |
-| + achieved-area crop fix (unconditional) | 0.835 | 0.797 | 1.184× | 0 folds |
-| **+ corner/translation alignment + tau anneal** | **0.868** | **0.839** | 1.196× | 0 folds |
-| Gingerbread man (soft 0.737, historical) | — | — | 1.442× | 4π at 1.2e-13, 0 folds |
-| Plane, torus (soft 0.751, historical) | — | — | — | fold-free (planar Tutte) |
+**The solver is validated against the original, not against itself.** The MATLAB reference
+was rerun under Octave and its *converged embedding* dumped — not just its inputs. The
+Python solver reproduces it to **8.3e-9 max / 3.0e-9 median per vertex**, against a test
+gate of 1e-6 (`tests/test_golden_solution.py`, fixtures in `tests/golden/reference_rerun/`). Along the way the port surfaced a reversed L-BFGS
+two-loop recursion inherited from the reference — fixing it cut solver iterations by a
+third and moved the converged embedding by 5e-11.
 
-**Round 10 — strict paper parity (2026-08-12, the corrected method).** The first
-run of the paper's demonstrated regime on the sphere — greyscale SDS at
-guidance 100, 10:1 LRs, full-run joint, constant t∼U(0.02, 0.98), starting from
-the **undeformed kite** with a random texture (no carve, no target silhouette,
-no image anchor: diffusion's only role is the score gradient) — produced
-`runs/r10_parity/parity_fish`: every tile a fish (body, eye, fanned tail fins),
-perimeter articulated to 1.407×, **zero folds and zero reverts across all 7000
-joint steps**, 4π certificate at 2.6e-8. Config:
-`sphere_texture_octa_parity.yaml` via `batch_r10_parity.yaml`. The solver
-underneath is validated against the reference implementation's converged
-output to 8.3e-9 per vertex (`tests/test_golden_solution.py`; the reference was
-rerun under Octave — `tests/golden/reference_rerun/`). Presentation: the hue
-tint is a no-op on greyscale (achromatic fixed point), so the color variant
-uses per-tile diagonal colorization along the same 3-coloring.
+**Speed.** The hot path was profiled per phase rather than guessed at. Attention was
+already optimal (torch 2.6 dispatches diffusers to FlashAttention-2 through native SDPA);
+the real costs were the VAE encoder at 48% of wall clock and the CPU Tutte solve at 22%.
+Swapping the encoder for TAESD and rebuilding the solver stack (textbook two-loop order,
+memory 8, stale-preconditioner reuse, GMRES-preconditioned adjoint) took a step from
+**615 ms to 232 ms — 2.7× — while *doubling* the texture resolution** (256 → 512).
+Both figures are the mean over the same 700 steps of a config-matched A/B pair,
+`runs/r14_accel/{ctrl,full_512}/tex_s0/timing.csv`.
 
-Background on the rendered sphere (`metrics_background.py`, 30 tinted orbit
-views): the shipped fish read **1.91%** background-like; the polish scrub +
-gutter fill take the same checkpoint to **0.27%** with structurally zero
-background texels — no retraining.
+### What we measured
 
-Texture-phase speed on the current machine: 0.54 → 0.42 s/step (~22%), and peak
-VRAM 9.1 → 7.5 GiB, from the frozen-solve cache + cached rasterizer context +
-`TORCH_COMPILE=true`.
-
-Four things moved the needle originally, in the order we found them (the carve
-gains above came later, from measurement: the alignment POSE dominates —
-scoring it by where the four immovable cone corners land, and searching
-translation, was worth more than any framing or area-measure change we tried):
-
-**The step budget.** Score distillation needs the full 7000-step schedule. At 1400 the
-texture is coloured stipple; the same run at 7000 resolves into clean icing, scales and
-eyes. Nothing before the timestep anneal completes predicts the final result — an earlier
-run was abandoned at step 1100 over blobs that were the prompt's *candy buttons*, still
-forming.
-
-**Cotangent initialization.** The reference solver builds its system from `cotmatrix`;
-our weights mode started from *uniform* weights, so `W = 0` was not the fundamental domain
-we designed but a harmonic distortion of it — per-face areas spread **82×** on the kite.
-Since the UV is uniform barycentric that is also the texel-density range across one tile,
-i.e. an 82× spread in effective per-texel learning rate. Referencing the solve instead
-(`COTANGENT_RELATIVE_WEIGHTS`) drops it to **1.4×** and cut final texture loss by 24%.
-
-**Reachability, not figure choice.** Shapes that tile under a fixed group are a thin
-subset, and a diffusion model draws with no such constraint. Screening 64 candidates and
-keeping the most *reachable* one is worth **+0.052 IoU** — more than the entire
-fish-vs-gingerbread gap (+0.036). Selecting on figure area instead, as the generator's own
-heuristic does, picked a loser every time we checked.
-
-**A figure the group can adopt.** Measured best IoU by prompt: fish 0.762, leaf 0.741,
-gingerbread 0.726, bird 0.696, **lizard 0.659** — despite lizards being *the* Escher motif.
-That is the lesson rather than a contradiction: Escher *designed* his figures around the
-tiling constraint. Note also that fish at 0.762 reads unmistakably as fish while
-gingerbread at 0.726 reads as a decorated star — **IoU is a weak proxy for legibility**.
-What matters is where the residual error lands. A fish tolerates a fattened body; a
-humanoid does not tolerate missing limbs.
-
-### The subject-as-tile recipe (rounds 5–6, 2026-08-11)
-
-The carve numbers above describe the deterministic shape phase. The final
-recipe — `configs/sphere_texture_octa_final.yaml` — goes further: it re-reads
-the original Generative Escher Meshes method and runs shape+texture **jointly
-for the entire 7000 steps** (shape LR 10× texture, ~zero shape regularization,
-random roll augmentation, StepLR, texture-drop 50), from a KITE_N-40 carve with
-an image-anchored texture init, under the weights-mode fold-revert safety net
-(spherical Tutte has no planar injectivity theorem; measured: **zero folds and
-zero reverts across >60k joint steps**). The outline articulates instead of
-smoothing — the tile silhouette itself reads as the subject.
-
-Measured along the way: a stock run of the upstream planar code does *not*
-reproduce the paper's figures (its showcases are curated); the minimal
-`"A professional cartoon of X, a masterpiece"` template forms subject-shaped
-outlines where style-piles dilute them, but the flat-vector style prompt is
-the seed-stable default on the sphere; the image anchor — not the prompt or
-guidance — supplies saturation; and the **figure's silhouette phrasing is a
-first-class lever**: a "chubby, arms hugged to the body" gingerbread carved
-0.830 where the default phrasing managed 0.788, and turned tray-ground filler
-into corner star pockets. Showcase runs: `gemfull_hires_s0` / `fish_hires_s1`
-(fish), `ginger_chunky` (gingerbread, + chroma floor 25), `gecko`.
+- **The step budget is real.** At 1400 steps the texture is coloured stipple; the same run
+  at 7000 resolves into clean icing, scales and eyes. Nothing before the schedule
+  completes predicts the final result — one run was nearly abandoned at step 1100 over
+  blobs that turned out to be the prompt's *candy buttons*, still forming.
+- **Cotangent initialisation.** Starting the weights mode from *uniform* weights made
+  `W = 0` a harmonic distortion of the domain rather than the domain itself — per-face
+  areas spread **82×**, which is also the texel-density range and therefore the effective
+  per-texel learning-rate range. Referencing the solve instead drops it to **1.4×**.
+- **Prompt phrasing is a first-class geometric lever.** Asking for "long arms and legs
+  stretched wide" took the worst unpainted corner pocket from 31.75° to 4.75° of arc where
+  neither extra geometric freedom nor added context views helped at all.
+- **Luminance polarity decides where colour lands.** Under the gated recolour, whichever
+  of figure or ground is *darker* takes the tile colour. Describing the decoration in the
+  prompt ("a cookie body decorated with white icing buttons") controls that polarity — and
+  is what finally made the gingerbread man read as gingerbread.
+- **A metric alone is not a verdict.** An arm that scored a *perfect* zero on the
+  corner-pocket metric did so by dissolving its figures into generic mass. Every gate in
+  this project pairs a number with eyes on the image.
 
 ## Current limitations
 
-The gingerbread man was the honest failure case for two full attempts — cookies
-painted on a gray tray — until the figure-geometry fix above; what remains true
-is that limbed figures need their silhouette *phrased for tiling* (limbs hugged
-to the body), where curled fish and reptiles tile as the model draws them.
-`configs/` keeps the historical alternative — a smaller `ISOLATED_DISTANCE`
-makes score distillation paint a recognizable figure *inside* each tile
-(`output/texD_figure_in_tile`), less Escher-pure but always legible.
+Thin, elongated subjects resist the equivariance constraint: the candy cane tiles as
+handsome cane-hooks rather than a literal candy cane, and the snowman needed its prompt
+rephrased as a cookie before it resolved. Curled fish and reptiles tile as the model draws
+them; humanoids need their silhouette phrased for tiling. Where a figure genuinely reaches
+the tile edge, differently-coloured neighbours still abut — that is the Escher interlock
+itself, not an artefact, and no render mode should hide it.
 
 Untried levers: an area-preserving (authalic) rather than harmonic UV, texel-density
-normalization of the accumulated texture gradients, and a VSD-style objective. On that
-last one — lowering the guidance scale *without* switching objectives fails outright
-(measured: CFG 12 collapsed the texture to flat stipple). Vanilla SDS needs high guidance
-to overcome its own gradient variance; VSD is what makes low CFG viable, so the two must
-move together.
+normalisation of accumulated texture gradients, and a VSD-style objective. On that last
+one — lowering guidance *without* switching objectives fails outright (measured: CFG 12
+collapsed the texture to flat stipple). Vanilla SDS needs high guidance to overcome its
+own gradient variance; VSD is what makes low CFG viable, so the two must move together.
 
 ## What's here
 
-- `escher/OTE/core/spherical/` — Karcher energy with analytic gradients, projected
+- `escher/OTE/core/spherical/` — Karcher energy with analytic gradients, the projected
   L-BFGS with the reference's two-stage preconditioner schedule, and the implicit
   differentiation layer (validated against finite differences to ~1e-8).
-- `escher/OTE/tilings_sphere/` — both orbifold parameterizations for the lune and the
-  kite: weights-mode constraint systems (`DihedralOrbifold`, `OctahedralOrbifold`) and
-  boundary-explicit ones (`BoundaryExplicitDihedral`, `BoundaryExplicitTriple`).
-- `escher/geometry/` — fundamental-domain meshes (lune + kite), the spherical tiler
-  for all four rotation-group families, and the signed-solid-angle certificate.
-- `escher/shape_target.py` / `escher/soft_silhouette.py` — the deterministic shape
-  loss: target binarization and de-jaggying, area-matched alignment, and the analytic
-  soft silhouette (the rasterizer's alpha carries no vertex gradients — measured; the
-  analytic polygon does).
-- `escher/geometry/cotangent_weights.py` — the reference solver's clamped cotangent
-  weights, shared by both parameterizations so the two cannot drift apart again.
-- `escher/main_shape.py` / `escher/main_shape_planar.py` / `escher/main_sphere.py` /
-  `escher/main.py` / `escher/render_final.py` — the pipeline stages, sphere and plane.
-- `escher/rendering/palette.py` — the per-tile hue rotation and the tiling adjacency
-  3-coloring.
-- `escher/rendering/texture_mask.py` / `escher/texture_polish.py` /
-  `escher/metrics_background.py` — the zero-background toolkit: UV gutter fill
-  for the ~60% of texels no triangle samples, the deterministic background
-  scrub, and the render gate that measures them.
-- `escher/pipeline/` — the unattended batch driver (spec → two-lane scheduler →
-  manifest + contact sheet).
-- `escher/pixel_solid_angle.py` — per-pixel spherical area of the shape camera
-  (pixel counts are not steradians; the area matching now knows).
+- `escher/OTE/tilings_sphere/` — both orbifold parameterisations for the lune and the
+  kite: weights-mode constraint systems and boundary-explicit ones.
+- `escher/geometry/` — fundamental-domain meshes, the spherical tiler for all four
+  rotation-group families, and the signed-solid-angle certificate.
+- `escher/main_sphere.py` — the joint SDS loop: solve, render, distill, step.
+- `escher/render_final.py` — turntable, textured OBJ, contact sheet.
+- `escher/rendering/palette.py` — the balanced pinwheel-aware colouring and the three
+  per-pixel colour modes (`flat`, `figure`, `ink`).
+- `escher/pipeline/` — the unattended batch driver (spec → two-lane scheduler → manifest
+  + contact sheet).
+- `escher/metrics_*.py` — the measurement kit: background fraction, inter-figure murk,
+  outline articulation, and the rotation-centre pocket metric.
+- `escher/main_shape.py`, `escher/r8_chain.py` — the **deterministic baseline**: a
+  silhouette carve and a warped image bake with *zero* score distillation. Kept as the
+  ablation the real method is judged against, not as the method.
 
 ## Attribution
 
-This is a public mirror of a collaborative research project. The planar tiling
-machinery comes from Generative Escher Meshes (see `license.txt` for upstream terms);
-the spherical orbifold Tutte formulation follows Aigerman &amp; Lipman's reference
-implementation. The spherical extension — the differentiable Karcher solve, the
-boundary-explicit parameterizations, the deterministic silhouette shape phase, and the
-certified tiling pipeline — is this project's contribution.
+This is a public mirror of a collaborative research project. The planar tiling machinery
+comes from Generative Escher Meshes (see `license.txt` for upstream terms); the spherical
+orbifold Tutte formulation follows Aigerman &amp; Lipman's reference implementation. The
+spherical extension — the differentiable Karcher solve, the boundary-explicit
+parameterisations, the joint-SDS sphere pipeline, the gated presentation layer, and the
+certified tiling deliverable — is this project's contribution.
